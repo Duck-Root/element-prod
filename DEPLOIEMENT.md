@@ -1,342 +1,275 @@
-# Déployer une nouvelle stack Element / Matrix sur Debian
+# Déploiement Matrix — Nginx installé sur le serveur
 
-Procédure préparée le 22 octobre 2026 pour une **installation vide** sur une autre
-machine. Les comptes, salons, messages, clés et secrets du POC ne sont pas copiés.
-Les commandes ci-dessous sont à exécuter sur la machine de production, sauf mention
-contraire. Aucun déploiement distant n’a été exécuté par cette préparation.
+Profil refait le 22 octobre 2026 : **aucun service proxy Docker**. Le serveur utilise
+Nginx installé sur l’hôte, un seul domaine HTTPS, des ports HTTP locaux et des ports
+média publics. L’administration est limitée aux IP publiques fixes du VPN et des bureaux.
 
-## 1. Périmètre et ressources
+## 1. Préparer le serveur et le domaine
 
-Le dossier contient PostgreSQL, Synapse, Element Web, LiveKit, le service JWT RTC,
-coturn et Caddy. Authentification par mot de passe, validation des nouveaux appareils
-par ancienne session ou clé de récupération. Inscriptions libres, fédération Matrix,
-Scalar et serveur d’identité externe désactivés. La capacité LiveKit est configurée
-à 10 participants par salle.
+Prévoir pour la stack 2 vCPU, 2 Go de RAM et 30 Go SSD comme point de départ, **hors OS,
+Nginx, autres services, sauvegardes et croissance des médias**. Pour moins de dix
+utilisateurs, qualifier ensuite la charge avec le nombre maximal de participants.
 
-Réserver à la stack : **2 vCPU, 2 Go de RAM, 30 Go de SSD** pour commencer, hors OS,
-autres services, sauvegardes et croissance future des médias. Il s’agit d’un point
-de départ pour moins de 10 utilisateurs, pas d’une garantie de capacité. Dimensionner
-la VM en ajoutant la marge nécessaire au système ; par exemple 4 Go de RAM totale
-pour une VM dédiée. Prévoir un accès administrateur SSH et une IPv4 publique joignable.
-
-Ce profil ne déploie ni Ketesa ni le récepteur Alertmanager. Ils pourront être ajoutés
-ensuite avec leurs propres accès privés, en adaptant les guides du POC aux domaines
-et chemins de production. Les fichiers Caddy vides prévus pour ces extensions ne
-publient aucune console ni webhook.
-
-Les images sont épinglées aux versions du POC pour rendre le premier déploiement
-reproductible. Elles ne constituent pas une certification des dernières versions :
-vérifier les avis de sécurité et tester les mises à jour avant une ouverture durable.
-
-## 2. Choisir les noms définitifs
-
-L’exemple utilise **trois noms distincts** :
-
-| Usage | Exemple à remplacer | Variable |
-|---|---|---|
-| Identité / API Matrix | `matrix.exemple.fr` | `MATRIX_DOMAIN`, `SYNAPSE_URL` |
-| Interface Element | `element.exemple.fr` | `ELEMENT_URL` |
-| Appels et TURN | `rtc.exemple.fr` | `RTC_URL`, `TURN_HOST` |
-
-`matrix.exemple.fr` devient une partie permanente des identifiants, par exemple
-`@alice:matrix.exemple.fr`. Choisir ce nom avant de créer les comptes. **Ne pas
-utiliser l’identité de la base du POC pour une nouvelle base indépendante.**
-
-Avec DuckDNS, une variante possible est de créer un NOUVEAU domaine de base dans
-votre compte, puis d’utiliser `matrix.NOUVEAU.duckdns.org`,
-`element.NOUVEAU.duckdns.org` et `rtc.NOUVEAU.duckdns.org`. Les trois noms doivent
-réellement résoudre vers la nouvelle IP publique. Le certificat décrit plus loin
-couvre ces trois noms précis ; il ne demande pas de wildcard ni de token DuckDNS.
-
-Créer les enregistrements DNS A pointant vers l’IPv4 publique de production.
-Ne publier un AAAA que si IPv6 est effectivement routé, filtré et fonctionnel : un
-AAAA incorrect peut faire échouer la validation HTTPS. En cas d’IP dynamique,
-configurer séparément un mécanisme de mise à jour DNS ; le client ACME ne met pas
-l’adresse publique à jour.
-
-Sur une même IP publique, une redirection de port ne peut pas envoyer le même port
-vers deux VM à la fois. Pour faire cohabiter POC et production derrière la même box,
-il faut une autre IP publique ou un point d’entrée partagé adapté. Cette procédure
-suppose que les ports ci-dessous peuvent être consacrés à la nouvelle machine.
-La redirection du port 80 doit atteindre la nouvelle machine dès l’émission TLS.
-
-## 3. Préparer le réseau
-
-Si la machine est derrière un routeur, réserver son IP LAN dans le DHCP ou utiliser
-une IP statique. Rediriger les ports suivants vers CETTE IP LAN, avec les mêmes
-ports externes et internes et une source « Toutes » :
-
-| Protocole | Début | Fin | Destination | Usage |
-|---|---:|---:|---:|---|
-| TCP | 80 | 80 | 80 | HTTP et émission/renouvellement TLS |
-| TCP | 443 | 443 | 443 | Interfaces, API, WebSocket |
-| TCP | 7881 | 7881 | 7881 | Média LiveKit TCP |
-| UDP | 15000 | 15100 | 15000 | Média LiveKit UDP |
-| UDP | 3478 | 3478 | 3478 | STUN / TURN |
-| TCP | 3478 | 3478 | 3478 | TURN TCP |
-| TCP | 5349 | 5349 | 5349 | TURN TLS |
-| UDP | 15200 | 15300 | 15200 | Relais TURN |
-
-Sur un serveur directement exposé, autoriser ces mêmes ports dans le pare-feu de
-l’hébergeur et le filtrage de l’hôte. Garder SSH limité au réseau d’administration.
-Ne publier ni 5432, ni 8008, ni 7880, ni 8080, ni 2019, ni 8448.
-
-Les ports publiés par Docker peuvent contourner les règles UFW classiques : appliquer
-le filtrage au bon niveau (pare-feu réseau/hébergeur ou règles Docker adaptées).
-Ne pas supposer qu’un simple `ufw deny` protège un port Docker publié.
-
-HTTPS sortant et résolution DNS sont nécessaires aux téléchargements et à ACME.
-Les plages média doivent être routées directement, pas uniquement via un proxy HTTP.
-
-## 4. Installer les prérequis Debian
-
-Sur un Debian supporté, avec un utilisateur disposant de sudo :
+Docker Engine et Compose doivent être installés. Nginx doit être installé et géré
+sur CETTE machine, avec un processus maître capable de lire les clés TLS (installation
+Debian standard : maître root). Aucun conteneur Nginx n’est nécessaire.
 
 ```bash
 sudo apt update
-sudo apt install -y ca-certificates curl python3 openssl tar util-linux nano
-sudo install -m 0755 -d /etc/apt/keyrings
-sudo curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc
-sudo chmod a+r /etc/apt/keyrings/docker.asc
-```
-
-Ajouter le dépôt Docker officiel :
-
-```bash
-sudo tee /etc/apt/sources.list.d/docker.sources >/dev/null <<EOF
-Types: deb
-URIs: https://download.docker.com/linux/debian
-Suites: $(. /etc/os-release && echo "$VERSION_CODENAME")
-Components: stable
-Architectures: $(dpkg --print-architecture)
-Signed-By: /etc/apt/keyrings/docker.asc
-EOF
-sudo apt update
-sudo apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-sudo systemctl enable --now docker
+sudo apt install -y python3 openssl ca-certificates curl nano tar util-linux
 sudo docker version
 sudo docker compose version
+sudo nginx -v
 ```
 
-Si Docker est déjà installé, vérifier sa provenance et sa compatibilité avant de
-réinstaller des paquets. Ne pas mélanger sans examen Docker Debian, Docker CE et
-Podman ; suivre la procédure officielle pour résoudre les conflits éventuels.
+Si nécessaire, suivre les instructions Docker officielles :
+https://docs.docker.com/engine/install/debian/. Pour un serveur neuf sans Nginx :
+`sudo apt install nginx`. Ne pas réinstaller ou remplacer la configuration d’un
+Nginx existant sans vérifier ses autres sites.
 
-## 5. Transférer le dossier de déploiement
+Le dossier de travail est `/core/docker/Element_Matrix/matric-poc-prod`.
+Les commandes suivantes s’exécutent en root dans ce dossier, sauf indication contraire.
+Le répertoire est privé car il contiendra les clés et secrets.
 
-Depuis la machine où ce dépôt est présent, dans sa racine, créer une archive du
-profil neuf uniquement (aucune donnée du POC) :
+Choisir un **seul domaine définitif** pour cette installation neuve. Exemple :
+`matrix-prod.element-production.duckdns.org`. Le DNS doit pointer vers l’IPv4
+publique de production. Le domaine devient le suffixe des comptes ; ne pas le changer
+après création d’une base. Ne pas publier d’AAAA non fonctionnel.
+
+Ce profil repart avec une base vide. Ne pas copier la base, les clés ou les secrets
+d’un autre serveur Matrix pour créer un second serveur indépendant de même identité.
+
+## 2. Configurer .env
 
 ```bash
-tar -czf /tmp/matrix-production-neuf.tar.gz -C deployment/production .
-scp /tmp/matrix-production-neuf.tar.gz administrateur@IP_MACHINE_PRODUCTION:/tmp/
-```
-
-Sur la machine de production :
-
-```bash
-sudo install -d -m 0700 /core/docker/Element_Matrix/matric-poc-prod
-sudo tar -xzf /tmp/matrix-production-neuf.tar.gz -C /core/docker/Element_Matrix/matric-poc-prod
-sudo -i
 cd /core/docker/Element_Matrix/matric-poc-prod
-chmod 0700 scripts/*.sh scripts/*.py
 cp -n .env.example .env
 chmod 0600 .env
-```
-
-À partir d’ici, les blocs sont exécutés **en root** dans `/core/docker/Element_Matrix/matric-poc-prod`.
-Le dossier est réservé à root car il contiendra des secrets. Ne pas y extraire de
-sauvegarde du POC. Ne pas copier son `.env`, son `configs/generated/` ou son `data/`.
-
-## 6. Renseigner la configuration
-
-**Guide détaillé : [REMPLIR-ENV.md](REMPLIR-ENV.md)**. Il explique chaque URL,
-la différence entre IP publique et locale, les ports, images et secrets. Les trois
-URL servent trois fonctions sur la même machine, pas trois serveurs différents.
-
-```bash
 nano .env
 ```
 
-Adapter uniquement les paramètres utiles avant le premier rendu :
+Voir [REMPLIR-ENV.md](REMPLIR-ENV.md). Exemple :
 
 ```dotenv
-COMPOSE_PROJECT_NAME=matric-poc-prod
-MATRIX_DOMAIN=matrix.exemple.fr
-SYNAPSE_URL=https://matrix.exemple.fr
-ELEMENT_URL=https://element.exemple.fr
-RTC_URL=https://rtc.exemple.fr
-TURN_HOST=rtc.exemple.fr
-SERVER_IP=VOTRE_IPV4_PUBLIQUE
+COMPOSE_PROJECT_NAME=matrix-prod
+MATRIX_DOMAIN=matrix-prod.element-production.duckdns.org
+SYNAPSE_URL=https://matrix-prod.element-production.duckdns.org
+ELEMENT_URL=https://matrix-prod.element-production.duckdns.org
+RTC_URL=https://matrix-prod.element-production.duckdns.org
+TURN_HOST=matrix-prod.element-production.duckdns.org
+SERVER_IP=88.169.112.139
 BIND_IP=0.0.0.0
-HTTP_PORT=80
-HTTPS_PORT=443
-LIVEKIT_TCP_PORT=7881
-LIVEKIT_UDP_START=15000
-LIVEKIT_UDP_END=15100
-TURN_PORT=3478
-TURN_TLS_PORT=5349
-TURN_UDP_START=15200
-TURN_UDP_END=15300
-TLS_MODE=provided
+ADMIN_VPN_IP=
+ADMIN_OFFICE_IP=
 ```
 
-Conserver les lignes d’images et les lignes de secrets vides : le rendu génère les
-secrets automatiquement. Ne pas utiliser littéralement `VOTRE_IPV4_PUBLIQUE`.
-`SERVER_IP` est l’IP annoncée aux clients pour les médias ; ce n’est pas l’IP LAN
-quand le serveur est derrière un NAT. `BIND_IP=0.0.0.0` publie les ports sur toutes
-les interfaces IPv4 de la machine.
+Remplacer domaine et IP selon votre production. Renseigner les IP publiques de
+SORTIE du VPN et des bureaux dans les deux dernières lignes. Vides, elles bloquent
+l’administration pour tout le monde ; le reste d’Element reste public. Les secrets
+applicatifs restent vides jusqu’au premier rendu.
 
-Contrôler les noms avec vos vraies valeurs :
+Les ports locaux par défaut sont 18008 (Synapse), 18080 (Element), 18081 (JWT),
+17880 (LiveKit HTTP) et 18082 (Ketesa). Vérifier qu’ils sont libres avec `ss -lnt`.
+Ils sont toujours publiés sur `127.0.0.1`, indépendamment de `BIND_IP`.
+
+## 3. Préparer le réseau public
+
+| Protocole | Ports | Destination |
+|---|---|---|
+| TCP | 443 | Nginx hôte |
+| TCP | 80, facultatif avec DNS-01 | Nginx hôte, redirection vers HTTPS |
+| TCP | 7881 | LiveKit, média |
+| UDP | 15000–15100 | LiveKit, média |
+| TCP/UDP | 3478 | TURN |
+| TCP | 5349 | TURN TLS |
+| UDP | 15200–15300 | Relais TURN |
+
+Avec une IP publique directement portée par le serveur, autoriser ces flux dans le
+pare-feu hôte/hébergeur. Derrière un routeur, rediriger ces ports vers l’IP LAN du
+serveur, avec les mêmes ports internes/externes. Tailscale n’est pas requis.
+
+Ne pas ouvrir publiquement 18008, 18080, 18081, 17880, 18082, 5432, 8008 ou 8080.
+Les publications Docker peuvent contourner les règles UFW classiques : vérifier le
+filtrage effectif au niveau Docker/réseau, pas seulement les règles UFW affichées.
+Les médias WebRTC ne passent pas par les locations HTTP de Nginx.
+
+## 4. Préparer un certificat : choisir une seule méthode
+
+### Méthode A — certificat déjà géré par le Nginx de production
+
+Si votre serveur dispose déjà d’un certificat valide pour le domaine :
 
 ```bash
-getent ahostsv4 matrix.exemple.fr
-getent ahostsv4 element.exemple.fr
-getent ahostsv4 rtc.exemple.fr
-ss -lntup
+python3 scripts/tls.py install \
+  --cert /etc/letsencrypt/live/VOTRE_DOMAINE/fullchain.pem \
+  --key /etc/letsencrypt/live/VOTRE_DOMAINE/privkey.pem
 ```
 
-Le port TCP 80 doit être libre sur cette machine. Vérifier les redirections depuis
-un réseau extérieur ; la seule résolution DNS ne prouve pas l’accessibilité.
+Remplacer les chemins par les fichiers réels de votre gestionnaire de certificats.
+Le script vérifie le nom, la validité, la chaîne publique et la correspondance clé/
+certificat. Il copie les fichiers sous `data/tls` pour qu’ils soient utilisables par
+TURN et Nginx ; le bundle des racines publiques sert à JWT.
 
-## 7. Émettre le certificat public
-
-Ce profil utilise **HTTP-01** : le port public 80 doit atteindre directement le
-conteneur ACME temporaire sur cette machine, pour les trois noms. Il n’utilise pas
-les scripts DuckDNS spécifiques du POC. Vérifier cette condition avant l’émission
-pour éviter des tentatives répétées et les limites de Let's Encrypt.
+Le vhost généré lit ces copies dans `data/tls`, pas directement les fichiers sources.
+Il faut donc rappeler la même commande après chaque renouvellement externe.
+Avec Certbot, créer un deploy-hook contenant cette commande avec des chemins absolus :
 
 ```bash
-python3 scripts/tls.py issue --email administrateur@votre-domaine.fr
+#!/bin/sh
+set -eu
+/usr/bin/python3 /core/docker/Element_Matrix/matric-poc-prod/scripts/tls.py install \
+  --cert /etc/letsencrypt/live/VOTRE_DOMAINE/fullchain.pem \
+  --key /etc/letsencrypt/live/VOTRE_DOMAINE/privkey.pem
 ```
 
-Cette commande accepte les conditions Let's Encrypt, crée un compte ACME local,
-demande un certificat SAN couvrant Matrix, Element et RTC/TURN, puis vérifie la
-chaîne et la correspondance clé/certificat. Les domaines du certificat apparaîtront
-dans les journaux publics Certificate Transparency.
+Enregistrer après adaptation dans `/etc/letsencrypt/renewal-hooks/deploy/matrix-stack.sh`,
+réservé à root et exécutable (`chmod 0700`). Le script de cette stack redémarre TURN
+si nécessaire et valide/recharge Nginx s’il est actif. Il ne l’arrête pas.
+Ne pas activer le timer DNS-01 de la méthode B pour un certificat externe.
 
-Les fichiers sont installés dans :
+### Méthode B — DuckDNS DNS-01, sans ouvrir le port 80
 
-```text
-data/tls/server.crt   certificat et intermédiaires
-data/tls/server.key   clé privée
-data/tls/ca.crt       racines publiques pour le service JWT
-data/acme/           compte ACME et certificats de renouvellement
+Pour un domaine appartenant à votre compte DuckDNS :
+
+```bash
+python3 scripts/tls.py issue --email votre-adresse@domaine.fr
 ```
 
-Le répertoire `data` est protégé par root. Les fichiers TLS doivent rester lisibles
-par les UID des services qui montent le sous-répertoire TLS ; ne pas rendre la clé
-illisible aux conteneurs en changeant ses permissions sans adapter les UID.
+Le token DuckDNS est demandé en **saisie masquée**, puis enregistré en 0600 dans
+`data/acme/duckdns-token`. Ne pas le transmettre dans un message, une commande ou
+`.env`. Le client ACME ponctuel modifie le TXT DNS, sans changer l’adresse A/AAAA
+et sans publier de port. Les termes Let's Encrypt sont acceptés lors de l’émission.
+Les noms du certificat sont publiés dans Certificate Transparency.
 
-## 8. Générer et démarrer la stack
+Le conteneur ACME a besoin d’accès DNS et HTTPS sortants. Il utilise un nouvel espace
+`data/acme/dns01/`, distinct des anciennes tentatives HTTP-01. Ne pas lancer deux
+clients DuckDNS sur le même domaine de base en même temps : le TXT est partagé.
+
+Un token d’un autre compte n’aura pas les droits sur le domaine. Le script vous laisse
+renseigner votre token sur le serveur ; il ne récupère pas automatiquement celui du POC.
+Si vous l’avez déjà préparé manuellement, le fichier doit contenir uniquement ce token.
+
+Aucune des deux méthodes ne nécessite d’arrêter Nginx ou de publier un port Docker
+80/443. Le certificat doit exister avant le rendu et avant l’activation HTTPS du vhost.
+
+## 5. Générer et démarrer les services Docker
 
 ```bash
 python3 scripts/render.py
 docker compose config --quiet
 docker compose pull
-docker compose run --rm --no-deps proxy caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
 docker compose up -d --wait --wait-timeout 240
 docker compose ps
 ```
 
-Le rendu prépare les volumes, attribue `/data` Synapse à l’UID 991, génère les secrets
-et écrit les configurations privées sous `configs/generated/`.
+Services attendus : postgres, synapse, element, jwt, livekit, coturn et ketesa.
+**Aucun service `proxy`, Caddy ou Nginx dans Compose.** Le rendu crée notamment :
 
-Le contrôle Caddy avant démarrage valide sa syntaxe et ses certificats ; les services
-amont démarrent ensuite avec Compose. Si une image manque pour votre architecture,
-résoudre sa compatibilité avant de continuer.
+- `configs/generated/nginx/matrix.conf` : vhost pour Nginx installé sur l’hôte ;
+- `configs/generated/ketesa/config.json` : serveur public restreint pour Ketesa ;
+- configurations Synapse/Element/LiveKit/JWT/TURN et nouveaux secrets.
+
+Les appels ne sont pas prêts avant activation de Nginx : JWT utilise son URL HTTPS
+publique. Dans Docker, un alias `host-gateway` fait résoudre ce domaine vers l’hôte
+pour JWT, afin d’éviter une dépendance au retour NAT. Nginx doit écouter sur les
+interfaces IPv4 de l’hôte, comme dans le vhost généré. Son routage revient ensuite
+sur les backends loopback.
 
 En cas d’échec :
 
 ```bash
-docker compose logs --tail=100 postgres synapse proxy jwt livekit coturn element
+docker compose logs --tail=100 postgres synapse element jwt livekit coturn ketesa
 ```
 
-Ne pas contourner un refus de rendu en supprimant des données. Après initialisation,
-`render.py` refuse d’écraser des fichiers ou un environnement modifiés. Pour une
-reconfiguration, sauvegarder et modifier les fichiers concernés de façon contrôlée,
-ou reconstruire dans un autre dossier uniquement si l’installation est encore vide.
+Les images sont épinglées aux versions de travail ; vérifier leur compatibilité et
+les avis de sécurité avant une ouverture durable. L’image Ketesa est le build
+`v1.5.1-subpath-admin`, prévu pour `/admin`.
 
-## 9. Vérifier les interfaces publiques
+## 6. Installer le vhost dans Nginx hôte
 
-Depuis le serveur, si le retour NAT de votre routeur le permet :
+Le modèle est dans `configs/nginx/matrix.conf.template`, mais **installer le fichier
+généré**, qui contient votre domaine, vos IP et les chemins réels des certificats :
+
+```bash
+install -m 0600 configs/generated/nginx/matrix.conf /etc/nginx/sites-available/matrix-prod.conf
+ln -s /etc/nginx/sites-available/matrix-prod.conf /etc/nginx/sites-enabled/matrix-prod.conf
+nginx -t
+systemctl reload nginx
+```
+
+Si le lien existe déjà, ne pas le recréer. Si Nginx était installé mais arrêté, après
+un `nginx -t` réussi : `systemctl enable --now nginx`.
+Sauvegarder et désactiver seulement un ancien vhost qui utiliserait le même domaine,
+sans toucher aux autres sites. Sur une distribution n’utilisant pas sites-enabled,
+installer le fichier dans un répertoire inclus par le contexte `http`.
+
+Nginx reçoit directement le trafic Internet. S’il est lui-même derrière un proxy/CDN,
+adapter la récupération de l’IP réelle en ne faisant confiance qu’aux proxies connus,
+avant de considérer les restrictions d’administration comme effectives.
+
+Les backends étant des ports loopback stables, une recréation des conteneurs ne
+nécessite pas de mettre à jour des IP Docker dans Nginx. Si vous changez ces ports
+ou les IP autorisées, suivre la reconfiguration de l’étape 11.
+
+## 7. Vérifier les interfaces et l’administration
 
 ```bash
 python3 scripts/check-endpoints.py
+curl --fail http://127.0.0.1:18008/health
+curl --fail http://127.0.0.1:18081/healthz
 ```
 
-Depuis un poste sur un réseau extérieur, sans Tailscale, remplacer les noms :
+Avec votre domaine et depuis un réseau extérieur :
 
 ```bash
-curl --fail https://matrix.exemple.fr/_matrix/client/versions
-curl --fail https://matrix.exemple.fr/.well-known/matrix/client
-curl --fail https://matrix.exemple.fr/.well-known/matrix/server
-curl --fail https://rtc.exemple.fr/livekit/jwt/healthz
-curl -I https://element.exemple.fr
+curl --fail https://VOTRE_DOMAINE/_matrix/client/versions
+curl --fail https://VOTRE_DOMAINE/.well-known/matrix/client
+curl --fail https://VOTRE_DOMAINE/livekit/jwt/healthz
 ```
 
-Résultats attendus : API, découvertes et santé JWT en 200 ; Element accessible sans
-avertissement TLS ; découverte client annonçant les URL Matrix et RTC choisies.
-Si le retour NAT n’est pas disponible depuis le LAN, prévoir un DNS interne adapté
-et confirmer quand même l’accès réel depuis Internet. Ne pas désactiver la validation TLS.
+Element doit s’ouvrir sur `https://VOTRE_DOMAINE/` sans avertissement TLS.
+`/_matrix/federation/v1/version` doit renvoyer 404. La fédération générale reste
+fermée ; l’exception OpenID nécessaire aux appels est accessible.
 
-L’API admin et la fédération générale doivent être refusées :
+Tester `/admin/` et `/_synapse/admin/v1/server_version` depuis :
 
-```bash
-curl -o /dev/null -s -w '%{http_code}\n' https://matrix.exemple.fr/_synapse/admin/v1/server_version
-curl -o /dev/null -s -w '%{http_code}\n' https://matrix.exemple.fr/_matrix/federation/v1/version
-```
+- une IP hors liste : 403 sur les deux ;
+- le VPN/bureau autorisé : interface accessible, API exigeant toujours un jeton admin.
 
-Attendu : 404. Le seul endpoint de la famille fédération exposé est l’OpenID nécessaire
-aux appels ; cela n’active pas les échanges de fédération entre serveurs.
+L’IP autorisée est la sortie publique du poste, pas l’IP du serveur. Le VPN doit
+acheminer cette destination via sa sortie professionnelle. Vides, les deux champs
+ADMIN bloquent tout accès d’administration.
 
-## 10. Créer les comptes et préparer la récupération
+## 8. Créer les comptes et tester les usages
 
 ```bash
 bash scripts/create-user.sh --admin
 bash scripts/create-user.sh
 ```
 
-Le premier compte est administrateur du serveur, les suivants sont des utilisateurs
-ordinaires. Les noms et mots de passe sont demandés en interactif. Ne pas renseigner
-les mots de passe dans une commande ni réutiliser les secrets du POC.
-
-Ouvrir `https://element.exemple.fr`, se connecter, créer un salon privé et inviter
-l’autre utilisateur. Chacun doit activer la sauvegarde de ses clés dans les paramètres
-de chiffrement et stocker sa clé de récupération dans un endroit sûr.
-Cette clé permet de valider un nouvel appareil sans l’ancienne session.
-La sauvegarde serveur ne remplace pas cette clé personnelle.
-
-L’e-mail et MAS ne sont pas configurés dans ce profil ; il n’y a ni réinitialisation
-par e-mail ni connexion par QR code.
-
-## 11. Qualifier les appels et la charge
+Les identifiants et mots de passe sont demandés interactivement. L’administrateur
+serveur n’est pas automatiquement administrateur des salons existants.
+Chaque utilisateur doit activer la sauvegarde des clés dans Element et conserver sa
+clé de récupération ; elle permet de valider un nouvel appareil sans l’ancienne session.
+Les inscriptions libres, Scalar, MAS et les e-mails ne sont pas activés.
 
 ```bash
 python3 scripts/test-rtc.py
 ```
 
-Le script demande un compte de test, crée un salon temporaire et vérifie les
-transports, OpenID et l’émission de jetons LiveKit, puis quitte et oublie le salon.
-Il ne transporte pas de médias et ne prouve pas l’ouverture des plages UDP.
+Ce diagnostic teste les transports, OpenID et l’émission de jetons. Valider aussi
+les médias avec deux vrais postes dont un extérieur : messages, photos, documents,
+audio, vidéo et partage d’écran. Faire un test de 10–15 minutes au nombre maximal
+de participants attendu, et suivre `docker stats $(docker compose ps -q)`.
+Une page HTTPS correcte ne prouve pas que les plages UDP sont accessibles.
 
-Faire ensuite une recette entre au moins deux postes, dont un hors LAN/Tailscale :
-messages, 20 photos, téléchargement d’un fichier, appel audio, caméra, partage d’écran.
-Faire aussi un appel au nombre maximal de participants prévu, pendant 10–15 minutes.
+## 9. Renouveler les certificats
 
-```bash
-docker stats $(docker compose ps -q)
-docker compose logs --tail=50 livekit jwt coturn
-```
+Pour la **méthode A**, conserver le renouvellement de votre gestionnaire externe et
+le deploy-hook d’installation de l’étape 4. Tester la commande du hook manuellement.
+Ne pas programmer une seconde autorité ACME pour le même certificat sans nécessité.
 
-Suivre CPU, RAM, débit réseau et espace disque. Les problèmes de médias proviennent
-souvent d’une mauvaise `SERVER_IP`, d’une redirection UDP absente ou d’un filtrage
-réseau. Une page Element fonctionnelle ne prouve pas que les appels passent.
-
-## 12. Automatiser le renouvellement TLS
-
-Tester la commande : si le certificat est valide plus de 30 jours, elle ne provoque
-aucune interruption.
+Pour la **méthode B DNS-01**, une fois la première émission réussie :
 
 ```bash
 python3 scripts/tls.py renew
@@ -347,100 +280,94 @@ systemctl enable --now matrix-production-acme.timer
 systemctl list-timers matrix-production-acme.timer
 ```
 
-Le contrôle est quotidien. Lorsqu’un renouvellement est nécessaire, le script arrête
-Caddy pour libérer le port 80, renouvelle et valide les fichiers, redémarre TURN, puis
-relance Caddy. **L’accès web et les appels peuvent être interrompus à cette occasion.**
-Le bloc `finally` relance Caddy même si ACME échoue avant le remplacement des fichiers.
-En cas d’arrêt brutal du processus ou de l’hôte, vérifier son retour en ligne.
-Conserver les redirections et le DNS fonctionnels après l’installation.
-
-Si `/core/docker/Element_Matrix/matric-poc-prod` est remplacé par un autre chemin, adapter WorkingDirectory
-et ExecStart dans le service systemd avant de l’installer.
+Le contrôle est quotidien ; le renouvellement s’effectue dans les 30 derniers jours.
+Il ne publie aucun port, ne stoppe pas Nginx, valide les fichiers, sauvegarde l’ancien
+TLS, redémarre TURN si modifié et recharge Nginx après `nginx -t`. Si les racines
+publiques changent, JWT est recréé pour actualiser son fichier monté.
+Des appels utilisant TURN peuvent être perturbés par son redémarrage.
+Adapter les chemins du service si le projet est déplacé.
 
 ```bash
 journalctl -u matrix-production-acme.service --no-pager -n 80
 openssl x509 -in data/tls/server.crt -noout -dates -issuer
 ```
 
-Pour un renouvellement sans arrêt web, prévoir ensuite DNS-01 ou un webroot ACME.
-Le mécanisme HTTP-01 fourni ici privilégie une exploitation simple et explicite.
-
-## 13. Sauvegarder et vérifier une restauration
+## 10. Sauvegarde et restauration
 
 ```bash
 bash scripts/backup.sh
 ```
 
-Le script arrête temporairement proxy/JWT/Synapse, fait un `pg_dump` cohérent, archive
-les configurations, clés, médias, états Caddy et le compte ACME, calcule les empreintes,
-puis relance les services. Les archives contiennent tous les secrets.
+Le script suspend temporairement Synapse/JWT, réalise un dump PostgreSQL cohérent
+avec les médias et archive les paramètres, scripts, clés et compte ACME.
+Il **n’arrête pas le Nginx hôte**, pour laisser ses autres sites accessibles.
+Les requêtes Matrix peuvent échouer pendant la maintenance.
+Sauvegarder aussi `/etc/nginx`, les fichiers du gestionnaire de certificats externe
+et ses hooks. Conserver les archives chiffrées sur un autre stockage.
 
-Copier chaque sauvegarde sur un stockage distinct, chiffré et contrôlé. Programmer
-ce script dans une fenêtre de maintenance, puis surveiller la réussite et l’ancienneté
-des sauvegardes. Leur rétention doit être définie selon l’espace disponible.
-
-Test de restauration sur une machine isolée, de même architecture avec les images
-épinglées disponibles (ne jamais écraser une production active) :
+Pour restaurer, sur une machine isolée et vide, sans serveur Matrix actif de même
+identité accessible publiquement :
 
 ```bash
-# Copier synapse.dump, files.tar.gz et SHA256SUMS dans /root/restauration-matrix.
+# Placer le contenu d’une sauvegarde dans /root/restauration-matrix.
 cd /root/restauration-matrix
 sha256sum -c SHA256SUMS
 install -d -m 0700 /opt/matrix-restauration
 tar --numeric-owner -xzf files.tar.gz -C /opt/matrix-restauration
 cd /opt/matrix-restauration
-docker compose config --quiet
 docker compose up -d --wait postgres
 docker compose exec -T postgres pg_restore --exit-on-error --no-owner -U synapse -d synapse < /root/restauration-matrix/synapse.dump
+python3 scripts/render.py --update
 docker compose up -d --wait --wait-timeout 240
 ```
 
-Ce test doit avoir lieu dans un réseau isolé : l’archive restaure les noms publics,
-le projet Compose, l’IP média et les identités du serveur. Ne pas lancer deux serveurs
-indépendants utilisant la même identité sur le réseau public. Utiliser un DNS de test
-ou un fichier hosts pour les vérifications. Pour un vrai remplacement après panne,
-laisser l’ancien hôte arrêté puis basculer DNS/NAT vers le nouveau.
+La régénération garde l’identité et les secrets ; elle adapte le chemin absolu TLS
+au dossier de restauration. Vérifier le vhost généré avant son installation dans le
+Nginx de test. Le certificat est celui sauvegardé : s’il a expiré, le renouveler via
+le gestionnaire approprié. Les sauvegardes serveur ne remplacent pas les clés de
+récupération personnelles. Ne pas faire fonctionner simultanément deux copies
+indépendantes de la même identité sur Internet.
 
-## 14. Exploitation et mises à jour
+## 11. Reconfiguration et mises à jour
+
+Après modification des ports ou des IP administratives dans `.env` :
 
 ```bash
-cd /core/docker/Element_Matrix/matric-poc-prod
-docker compose ps
-docker compose logs --tail=100 synapse proxy livekit jwt coturn
-df -h
-docker system df
+python3 scripts/render.py --update
+docker compose config --quiet
+docker compose up -d --wait --wait-timeout 240
+install -m 0600 configs/generated/nginx/matrix.conf /etc/nginx/sites-available/matrix-prod.conf
+nginx -t && systemctl reload nginx
 ```
 
-Surveiller : espace disque et croissance des médias/BDD, expiration TLS, santé des
-services, échec des sauvegardes, CPU/RAM et qualité des appels. Prévoir une alerte
-hors Matrix si toute la VM tombe.
+Le générateur sauvegarde `.env` et les configurations avant régénération. Le contenu
+manuel des fichiers générés peut être remplacé ; modifier le modèle/générateur si
+vous avez des personnalisations à conserver. Ne pas changer `server_name`, les
+secrets ou le mot de passe PostgreSQL pour une simple mise à jour.
 
-Avant une mise à jour : sauvegarder, examiner les notes des versions concernées,
-tester la combinaison d’images sur une instance isolée, puis mettre à jour les
-versions dans `.env` pendant une fenêtre de maintenance et lancer `docker compose
-pull` puis `docker compose up -d --wait --wait-timeout 240`.
-Ne pas descendre de version après une migration de base sans restauration adaptée.
-Ne pas utiliser `docker compose down -v`, un nettoyage de volumes ou une suppression
-de `data/` comme méthode de dépannage.
+Avant mise à jour des images : sauvegarder, examiner les notes de version, tester
+sur un environnement isolé, changer les versions dans `.env`, régénérer si nécessaire,
+puis `docker compose pull` et `docker compose up -d --wait --wait-timeout 240`.
+Prévoir une restauration si une migration de base rend un retour de version impossible.
+Surveiller disque, médias, santé, charge, expiration TLS et réussite des sauvegardes.
+Ne pas utiliser une suppression de `data/` ou de volumes comme dépannage.
 
-## 15. État de validation de ce dossier
+## 12. État de vérification
 
-Les modèles Compose, les syntaxes Python/Bash, le rendu d’une installation neuve
-avec certificat de test local et sa relance sans écrasement ont été contrôlés.
-Caddy a également validé cette configuration dans un conteneur isolé sans réseau
-ni port publié dans l’environnement de préparation.
-Ce profil utilise les configurations et versions du POC avec trois domaines séparés.
+Le profil est préparé et validé en environnement de test isolé : rendu, modèle Compose,
+ports HTTP loopback, absence de proxy Docker et syntaxe du vhost Nginx.
+Des backends de test ont aussi confirmé le routage et le retrait des préfixes RTC,
+les ACL en accès refusé/autorisé, la conservation des secrets avec --update et le
+refus de changement de l’identité Matrix.
+L’image Ketesa pour `/admin` a été vérifiée dans le registre.
+L’émission DNS-01, l’installation dans votre Nginx de production et un appel réel
+restent à valider sur le serveur cible. La préparation n’installe ni paquet ni vhost
+système, et ne démarre pas les services de production.
 
-L’installation réelle sur votre machine de production, l’émission ACME HTTP-01,
-le renouvellement avec interruption, la restauration PostgreSQL et la recette
-multi-postes restent à exécuter sur l’environnement cible. La validation statique ne
-remplace pas ces contrôles de déploiement.
-
-## Références officielles
-
-- Docker Debian : https://docs.docker.com/engine/install/debian/
-- Docker et filtrage réseau : https://docs.docker.com/engine/network/packet-filtering-firewalls/
-- Synapse : https://element-hq.github.io/synapse/latest/usage/configuration/config_documentation.html
-- LiveKit et ports : https://docs.livekit.io/transport/self-hosting/ports-firewall/
-- Lego HTTP-01 : https://go-acme.github.io/lego/usage/cli/obtain-a-certificate/
-- Vérification Element : https://docs.element.io/latest/element-support/device-verification/how-to-verify-devices/
+Références officielles :
+- https://docs.docker.com/engine/install/debian/
+- https://docs.docker.com/engine/network/packet-filtering-firewalls/
+- https://nginx.org/en/docs/http/websocket.html
+- https://nginx.org/en/docs/http/ngx_http_access_module.html
+- https://github.com/etkecc/ketesa#serving-ketesa-under-a-custom-path
+- https://go-acme.github.io/lego/dns/duckdns/

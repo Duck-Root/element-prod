@@ -23,6 +23,7 @@ services:
   synapse:
     <<: *common
     image: ${SYNAPSE_IMAGE}
+    ports: ["127.0.0.1:${SYNAPSE_HTTP_PORT:-18008}:8008/tcp"]
     environment:
       SYNAPSE_CONFIG_PATH: /config/homeserver.yaml
       UID: '991'
@@ -40,10 +41,13 @@ services:
   element:
     <<: *common
     image: ${ELEMENT_IMAGE}
+    ports: ["127.0.0.1:${ELEMENT_HTTP_PORT:-18080}:80/tcp"]
     volumes: [./configs/generated/element/config.json:/app/config.json:ro]
   jwt:
     <<: *common
     image: ${JWT_IMAGE}
+    ports: ["127.0.0.1:${JWT_HTTP_PORT:-18081}:8080/tcp"]
+    extra_hosts: ["${MATRIX_DOMAIN}:host-gateway"]
     env_file: ./configs/generated/jwt.env
     environment:
       SSL_CERT_FILE: /tls/ca.crt
@@ -59,6 +63,7 @@ services:
     command: [--config, /etc/livekit.yaml]
     volumes: [./configs/generated/livekit/livekit.yaml:/etc/livekit.yaml:ro]
     ports:
+      - '127.0.0.1:${LIVEKIT_HTTP_PORT:-17880}:7880/tcp'
       - '${BIND_IP}:${LIVEKIT_TCP_PORT}:${LIVEKIT_TCP_PORT}/tcp'
       - '${BIND_IP}:${LIVEKIT_UDP_START}-${LIVEKIT_UDP_END}:${LIVEKIT_UDP_START}-${LIVEKIT_UDP_END}/udp'
   coturn:
@@ -73,35 +78,20 @@ services:
       - '${BIND_IP}:${TURN_PORT}:${TURN_PORT}/tcp'
       - '${BIND_IP}:${TURN_TLS_PORT}:${TURN_TLS_PORT}/tcp'
       - '${BIND_IP}:${TURN_UDP_START}-${TURN_UDP_END}:${TURN_UDP_START}-${TURN_UDP_END}/udp'
-  proxy:
+  ketesa:
     <<: *common
-    networks:
-      matrix:
-        aliases:
-          - ${MATRIX_DOMAIN}
-          - ${SYNAPSE_HOST:-matrix.poc.test}
-          - ${RTC_HOST:-rtc.poc.test}
-    image: ${CADDY_IMAGE}
+    image: ${KETESA_IMAGE:-ghcr.io/etkecc/ketesa:v1.5.1-subpath-admin}
+    environment:
+      SERVER_HOST: 0.0.0.0
     volumes:
-      - ./configs/generated/reverse-proxy/Caddyfile:/etc/caddy/Caddyfile:ro
-      - ./configs/reverse-proxy/ketesa.caddy:/etc/caddy/ketesa.caddy:ro
-      - ./configs/reverse-proxy/alerts.caddy:/etc/caddy/alerts.caddy:ro
-      - ./configs/generated/reverse-proxy/client.json:/srv/client.json:ro
-      - ./data/tls:/tls:ro
-      - ./data/caddy:/data
-      - ./data/caddy-config:/config
-    ports:
-      - '${BIND_IP}:${HTTP_PORT}:80/tcp'
-      - '${BIND_IP}:${HTTPS_PORT}:443/tcp'
-    depends_on:
-      synapse: {condition: service_healthy}
-      element: {condition: service_started}
-      jwt: {condition: service_started}
+      - ./configs/generated/ketesa/config.json:/var/public/config.json:ro
+    ports: ["127.0.0.1:${KETESA_HTTP_PORT:-18082}:8080/tcp"]
     healthcheck:
-      test: [CMD, wget, -q, -O, /dev/null, 'http://127.0.0.1:2019/config/']
-      interval: 15s
-      timeout: 5s
-      retries: 10
+      test: [CMD, wget, --no-verbose, --tries=1, --spider, 'http://127.0.0.1:8080/health']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
 networks:
   matrix:
     driver: bridge

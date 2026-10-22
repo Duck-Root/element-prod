@@ -1,5 +1,5 @@
 [Unit]
-Description=Renouvellement HTTPS Matrix production
+Description=Renouvellement DNS-01 Matrix — Nginx hôte
 Requires=docker.service
 After=docker.service network-online.target
 Wants=network-online.target

@@ -1,145 +1,7 @@
-# Comprendre et remplir le fichier .env
+# Remplir .env — un domaine unique, Nginx sur l’hôte
 
-Le fichier `.env` est la fiche de paramètres de votre installation. Docker Compose
-et les scripts y lisent les noms de domaine, l’IP, les ports et les secrets.
-Il ne crée ni domaine DNS, ni redirection sur la box.
-
-Le fichier `.env.example` est un modèle. On le copie une seule fois vers `.env`,
-puis on modifie cette copie. Garder `.env` privé : il contiendra des mots de passe.
-
-## Pourquoi plusieurs URL pour une seule machine ?
-
-Tous les services tournent sur la même machine et peuvent utiliser **la même IP publique**.
-Les noms servent au proxy Caddy à savoir à quel service transmettre une demande.
-Ce profil neuf attend trois noms distincts ; il n’utilise pas le montage à URL
-unique de l’ancien POC.
-
-| Nom | Rôle | Qui l’utilise ? |
-|---|---|---|
-| `element.…` | La page web avec les salons, messages et boutons d’appel | Vos collègues : c’est le lien à leur transmettre |
-| `matrix.…` | Le serveur qui gère les comptes, messages, salons et fichiers | Element en arrière-plan ; ce nom apparaît aussi dans les identifiants |
-| `rtc.…` | Le service d’appels audio/vidéo et le relais réseau TURN | Les appareils des participants, automatiquement |
-
-Les trois noms pointent vers votre IP publique. **Il ne faut pas trois serveurs,
-ni trois IP publiques, ni trois redirections du port 443.** Une seule redirection
-TCP 443 vers la machine suffit pour ces URL ; Caddy les distingue par leur nom.
-Les ports média indiqués dans la procédure restent nécessaires pour les appels.
-
-## Ce que chaque champ signifie
-
-| Champ | Ce qu’il faut mettre | Exemple |
-|---|---|---|
-| `COMPOSE_PROJECT_NAME` | Un nom local pour identifier les conteneurs Docker | `matric-poc-prod` |
-| `MATRIX_DOMAIN` | Nom définitif du serveur Matrix, **sans** `https://` | `matrix.element-matrix-poc.duckdns.org` |
-| `SYNAPSE_URL` | Adresse HTTPS de l’API Matrix, avec le même nom que ci-dessus | `https://matrix.element-matrix-poc.duckdns.org` |
-| `ELEMENT_URL` | Adresse HTTPS de l’interface web à ouvrir dans le navigateur | `https://element.element-matrix-poc.duckdns.org` |
-| `RTC_URL` | Adresse HTTPS des services d’appel | `https://rtc.element-matrix-poc.duckdns.org` |
-| `TURN_HOST` | Nom du relais média, **sans** `https://` ; ici le même nom que RTC | `rtc.element-matrix-poc.duckdns.org` |
-| `SERVER_IP` | IPv4 publique que les clients doivent contacter pour les médias | `88.169.112.139` si vous utilisez toujours la même connexion Internet |
-| `BIND_IP` | Interface de la machine sur laquelle Docker publie les ports | Garder `0.0.0.0` |
-
-`MATRIX_DOMAIN` devient une partie de l’identité des comptes. Avec cet exemple,
-Alice sera `@alice:matrix.element-matrix-poc.duckdns.org`. Ce nom est à choisir
-avant la création des comptes ; il ne se renomme pas sur une base déjà utilisée.
-
-`0.0.0.0` signifie « écouter sur toutes les interfaces IPv4 de cette machine ».
-Ce n’est ni une adresse à communiquer aux collègues, ni une valeur à mettre dans
-le DNS, ni l’IP de destination à renseigner sur la box.
-
-## Exemple avec votre domaine DuckDNS actuel
-
-Si vous conservez le domaine `element-matrix-poc.duckdns.org` et la connexion dont
-l’IP publique est `88.169.112.139`, vous pouvez utiliser les **sous-domaines suivants
-à condition de vérifier qu’ils résolvent bien vers cette IP** :
-
-```dotenv
-COMPOSE_PROJECT_NAME=matric-poc-prod
-MATRIX_DOMAIN=matrix.element-matrix-poc.duckdns.org
-SYNAPSE_URL=https://matrix.element-matrix-poc.duckdns.org
-ELEMENT_URL=https://element.element-matrix-poc.duckdns.org
-RTC_URL=https://rtc.element-matrix-poc.duckdns.org
-TURN_HOST=rtc.element-matrix-poc.duckdns.org
-SERVER_IP=88.169.112.139
-BIND_IP=0.0.0.0
-```
-
-Cet exemple définit une **nouvelle identité Matrix**, distincte de l’ancien
-`matrix.duckyduckgator.duckdns.org`, puisque vous repartez avec une installation vide.
-Le lien à communiquer aux collègues devient :
-**https://element.element-matrix-poc.duckdns.org**.
-L’ancien lien sans le préfixe `element.` n’est pas publié par ce profil par défaut.
-
-Si le nom vous semble long, choisissez un autre domaine de base et remplacez-le
-partout de manière cohérente. Avec un domaine d’entreprise `entreprise.fr`, on
-pourrait utiliser `matrix.entreprise.fr`, `element.entreprise.fr` et `rtc.entreprise.fr`.
-Les domaines d’exemple `exemple.fr` ne sont pas à conserver dans votre configuration.
-
-Sur une autre connexion Internet, `SERVER_IP` et les DNS doivent utiliser l’IP
-publique de cette connexion, pas automatiquement `88.169.112.139`.
-
-## IP publique, IP locale et redirections
-
-Si vous testez sur la même machine qu’avant, derrière la même box :
-
-| Où ? | Valeur attendue |
-|---|---|
-| DNS des trois noms | `88.169.112.139`, votre IP publique actuelle à confirmer |
-| `SERVER_IP` dans `.env` | La même IP publique |
-| IP destination des règles NAT sur la box | L’IP LAN de la VM, auparavant `192.168.1.179` ; à vérifier |
-| `BIND_IP` dans `.env` | `0.0.0.0` |
-
-L’IP locale `192.168.1.179` n’est pas accessible directement depuis Internet.
-L’adresse Tailscale n’est pas à annoncer pour les médias si vos collègues doivent
-se connecter sans Tailscale. Si vous changez de VM, adapter la destination NAT.
-
-## Les ports : conserver les valeurs du modèle
-
-| Champs | Valeurs | Usage |
-|---|---|---|
-| `HTTP_PORT`, `HTTPS_PORT` | `80`, `443` | Pages, API, HTTPS et validation du certificat |
-| `LIVEKIT_TCP_PORT` | `7881` | Transport média de secours en TCP |
-| `LIVEKIT_UDP_START`, `LIVEKIT_UDP_END` | `15000`, `15100` | Plage audio/vidéo LiveKit |
-| `TURN_PORT`, `TURN_TLS_PORT` | `3478`, `5349` | Accès au relais TURN |
-| `TURN_UDP_START`, `TURN_UDP_END` | `15200`, `15300` | Plage média relayée par TURN |
-| `TLS_MODE` | `provided` | Le script TLS fournit un certificat public à Caddy/TURN |
-
-Ces plages restent sous votre limite de ports `16383`. Il faut que les règles
-NAT/pare-feu correspondent exactement aux valeurs choisies. Ne pas ajouter les
-ports dans les URL HTTPS de cet exemple ; le port 443 est implicite.
-
-## Les images : ne pas les remplacer par des adresses web
-
-Les champs `SYNAPSE_IMAGE`, `ELEMENT_IMAGE`, `JWT_IMAGE`, `LIVEKIT_IMAGE`,
-`COTURN_IMAGE`, `POSTGRES_IMAGE` et `CADDY_IMAGE` désignent les logiciels Docker et
-leurs versions. Par exemple `ghcr.io/element-hq/element-web:v1.12.31` est une image
-Docker, pas l’adresse de votre interface Element. Conserver les valeurs du modèle
-pour le premier test. Les mises à jour de version se préparent ensuite séparément.
-
-## Les secrets : laisser les champs vides au premier remplissage
-
-Laisser vides toutes ces lignes dans le `.env` neuf :
-
-```dotenv
-POSTGRES_PASSWORD=
-REGISTRATION_SHARED_SECRET=
-MACAROON_SECRET=
-FORM_SECRET=
-LIVEKIT_KEY=
-LIVEKIT_SECRET=
-TURN_SECRET=
-AS_TOKEN=
-HS_TOKEN=
-```
-
-`python3 scripts/render.py` génère leurs valeurs automatiquement après l’émission
-du certificat. Elles servent à la base de données, à Synapse, aux appels et à la
-communication entre services. Ce ne sont pas les mots de passe des utilisateurs.
-**Une fois générées, ne pas les vider, les remplacer ou les partager.**
-Les utilisateurs sont créés séparément avec `bash scripts/create-user.sh`.
-
-## Remplissage et vérification pas à pas
-
-En root, dans le dossier du nouveau projet :
+`.env` contient les paramètres lus par Docker Compose et le générateur. Il ne crée
+ni DNS ni règle de pare-feu. Il devient privé dès que les secrets sont générés.
 
 ```bash
 cd /core/docker/Element_Matrix/matric-poc-prod
@@ -148,38 +10,127 @@ chmod 0600 .env
 nano .env
 ```
 
-Dans Nano : modifier les valeurs, puis **Ctrl+O**, Entrée pour enregistrer et
-**Ctrl+X** pour sortir. Le fichier utilise une ligne `NOM=valeur` par paramètre,
-sans espace autour de `=`, sans virgule entre les lignes. Les lignes commençant
-par `#` sont des commentaires. Pour ce profil, écrire les valeurs sans guillemets.
+## Un seul nom public pour les fonctions web
 
-Vérifier les noms avec les valeurs réellement choisies, par exemple :
+Exemple avec le nom Matrix choisi dans votre fichier de test :
 
-```bash
-getent ahostsv4 matrix.element-matrix-poc.duckdns.org
-getent ahostsv4 element.element-matrix-poc.duckdns.org
-getent ahostsv4 rtc.element-matrix-poc.duckdns.org
+```dotenv
+COMPOSE_PROJECT_NAME=matrix-prod
+MATRIX_DOMAIN=matrix-prod.element-production.duckdns.org
+SYNAPSE_URL=https://matrix-prod.element-production.duckdns.org
+ELEMENT_URL=https://matrix-prod.element-production.duckdns.org
+RTC_URL=https://matrix-prod.element-production.duckdns.org
+TURN_HOST=matrix-prod.element-production.duckdns.org
+SERVER_IP=88.169.112.139
+BIND_IP=0.0.0.0
 ```
 
-Les trois doivent résoudre vers la bonne IP publique. Modifier `.env` ne suffit
-pas à modifier DuckDNS. Vérifier également le NAT du port 80 avant l’émission TLS.
+Remplacer le domaine et l’IP si la production utilise d’autres valeurs. Les trois
+URL sont **identiques**, sans `/element`, `/synapse` ou `/livekit` dans `.env` :
+le générateur ajoute les chemins RTC lui-même. `MATRIX_DOMAIN` et `TURN_HOST`
+s’écrivent sans `https://`, les trois URL avec `https://`.
 
-Continuer ensuite avec les étapes 7 et 8 de [DEPLOIEMENT.md](DEPLOIEMENT.md) :
+| Champ | Rôle |
+|---|---|
+| `COMPOSE_PROJECT_NAME` | Nom local des conteneurs Docker |
+| `MATRIX_DOMAIN` | Identité permanente du serveur : `@alice:ce-domaine` |
+| `SYNAPSE_URL` | Origine de l’API de comptes, salons, messages et fichiers |
+| `ELEMENT_URL` | Adresse à communiquer aux collègues, interface à la racine `/` |
+| `RTC_URL` | Origine publique des services d’appels |
+| `TURN_HOST` | Nom public du relais média, ici le même domaine |
+| `SERVER_IP` | IPv4 publique annoncée pour les médias, jamais l’IP LAN/Tailscale |
+| `BIND_IP` | Publication des ports média : garder `0.0.0.0` pour toutes les interfaces IPv4 |
+
+Le DNS du domaine doit résoudre vers `SERVER_IP`. Nginx reçoit le HTTPS sur le port
+443 et distingue les services par leur chemin. L’administration est sur `/admin/`.
+Le profil ne dépend pas de Tailscale. Si la machine est derrière une box, les règles
+NAT ciblent son IP LAN, pas `0.0.0.0` ni l’IP publique.
+
+**Ne pas changer `MATRIX_DOMAIN` après initialisation d’une base.** Le générateur
+refuse ce changement même avec `--update`.
+
+## Qui peut accéder à l’administration ?
+
+```dotenv
+ADMIN_VPN_IP=VOTRE_IP_PUBLIQUE_DE_SORTIE_VPN
+ADMIN_OFFICE_IP=VOTRE_IP_PUBLIQUE_DES_BUREAUX
+```
+
+Remplacer les deux textes par de vraies IP, ou laisser une ligne vide si ce réseau
+n’est pas utilisé. Accepte une IPv4/IPv6 ou un CIDR précis. Ne pas mettre d’URL,
+de port ou l’IP du serveur. Les deux champs vides génèrent un `deny all`.
+Un `/0` est refusé pour éviter une autorisation de tout Internet.
+
+Ces IP autorisent l’accès à `/admin/` et `/_synapse/admin/` ; un compte administrateur
+Matrix reste nécessaire. Avec un VPN en split tunneling, vérifier que la destination
+Matrix utilise effectivement sa sortie professionnelle.
+
+## Ports locaux pour Nginx : ne pas les ouvrir sur Internet
+
+```dotenv
+SYNAPSE_HTTP_PORT=18008
+ELEMENT_HTTP_PORT=18080
+JWT_HTTP_PORT=18081
+LIVEKIT_HTTP_PORT=17880
+KETESA_HTTP_PORT=18082
+```
+
+Ils sont publiés uniquement sur **127.0.0.1**, même si `BIND_IP=0.0.0.0`.
+Nginx installé sur la même machine les utilise directement ; il n’a pas besoin de
+résoudre des noms Docker. Garder ces valeurs si elles sont libres.
+Les cinq ports doivent être distincts et ne pas chevaucher les ports TCP publics.
+
+`HTTP_PORT=80` et `HTTPS_PORT=443` décrivent le point d’entrée Nginx hôte ; Docker
+ne publie aucun de ces ports. Le profil exige HTTPS sur 443 pour la découverte.
+
+## Ports média publics : à conserver dans le pare-feu/NAT
+
+```dotenv
+LIVEKIT_TCP_PORT=7881
+LIVEKIT_UDP_START=15000
+LIVEKIT_UDP_END=15100
+TURN_PORT=3478
+TURN_TLS_PORT=5349
+TURN_UDP_START=15200
+TURN_UDP_END=15300
+```
+
+TCP 7881, TCP/UDP 3478, TCP 5349, UDP 15000–15100 et UDP 15200–15300 doivent être
+accessibles directement pour les médias. Le vhost HTTPS ne remplace pas ces flux.
+
+## Certificats et images
+
+Garder `TLS_MODE=provided`. Le script `tls.py install` copie et valide un certificat
+existant ; `tls.py issue` en demande un via DuckDNS DNS-01, sans port 80 entrant.
+Voir DEPLOIEMENT.md. Le token DuckDNS n’est pas à mettre dans `.env`.
+
+Les champs `*_IMAGE` sont les versions des logiciels Docker, pas des URL web.
+`KETESA_IMAGE` doit rester une version **construite pour `/admin`**, par exemple
+`ghcr.io/etkecc/ketesa:v1.5.1-subpath-admin`. Garder les versions proposées pour le
+premier test, puis préparer les mises à jour séparément.
+
+## Secrets applicatifs
+
+Laisser vides au premier rendu : `POSTGRES_PASSWORD`, `REGISTRATION_SHARED_SECRET`,
+`MACAROON_SECRET`, `FORM_SECRET`, `LIVEKIT_KEY`, `LIVEKIT_SECRET`, `TURN_SECRET`,
+`AS_TOKEN`, `HS_TOKEN`. Le générateur les remplit après installation du certificat.
+Ce ne sont pas les mots de passe des utilisateurs. Ne jamais les vider ou les
+régénérer sur une base utilisée. Ne pas partager le `.env` complet dans un message.
+
+## Modifier après le premier rendu
+
+Pour modifier les IP autorisées ou les ports locaux, sauvegarder, éditer `.env`, puis :
 
 ```bash
-python3 scripts/tls.py issue --email VOTRE_ADRESSE_EMAIL
-python3 scripts/render.py
+python3 scripts/render.py --update
 docker compose config --quiet
+docker compose up -d --wait --wait-timeout 240
+install -m 0600 configs/generated/nginx/matrix.conf /etc/nginx/sites-available/matrix-prod.conf
+nginx -t && systemctl reload nginx
 ```
 
-Remplacer `VOTRE_ADRESSE_EMAIL` par une adresse réelle pour le compte Let's Encrypt.
-Ce paramètre est une adresse de contact, pas un compte SMTP et pas l’activation de
-la connexion par e-mail. Le script accepte les conditions de Let's Encrypt.
-Le rendu a besoin du certificat, d’où l’ordre des commandes.
-Le contrôle Compose se fait après le rendu : avant, les secrets sont vides et les
-fichiers générés n’existent pas encore.
-
-Ce document ne configure pas le DNS, ne remplit pas votre `.env` actif et ne démarre
-aucun conteneur. Une fois la stack initialisée, ne pas changer `MATRIX_DOMAIN` ou
-relancer le rendu pour forcer une modification : suivre la reconfiguration décrite
-dans la procédure.
+`--update` sauvegarde les fichiers générés et le `.env` avant le rendu puis remplace
+les configurations à partir des paramètres. Les personnalisations manuelles des
+fichiers générés peuvent être écrasées : les reporter au préalable dans le modèle
+ou le générateur. Les secrets existants sont conservés. Adapter les scripts de
+renouvellement externes si le chemin du projet ou le certificat source change.

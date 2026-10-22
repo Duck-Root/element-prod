@@ -2,6 +2,11 @@
 """Rendu sans dépendance Python externe ; JSON est également du YAML valide."""
 import hashlib, ipaddress, json, os, pathlib, re, secrets, subprocess
 from urllib.parse import urlsplit
+import argparse, shutil, datetime
+os.chdir(pathlib.Path(__file__).resolve().parent.parent)
+parser = argparse.ArgumentParser()
+parser.add_argument("--update", action="store_true", help="Sauvegarder puis régénérer sans changer l’identité Matrix")
+args = parser.parse_args()
 P = pathlib.Path
 os.umask(0o077)
 p = P('.env')
@@ -11,14 +16,7 @@ for line in s.splitlines():
     if line.strip() and not line.lstrip().startswith('#'):
         k, v = line.split('=', 1)
         e[k.strip()] = v.strip()
-for k in ('POSTGRES_PASSWORD REGISTRATION_SHARED_SECRET MACAROON_SECRET FORM_SECRET '
-          'LIVEKIT_KEY LIVEKIT_SECRET TURN_SECRET AS_TOKEN HS_TOKEN').split():
-    if not e.get(k):
-        e[k] = secrets.token_hex(32)
-        s = re.sub(r'^' + k + r'=.*$', k + '=' + e[k], s, flags=re.M)
-    if not re.fullmatch('[a-fA-F0-9]{32,128}', e[k]):
-        raise SystemExit(f'{k}: utiliser 32 à 128 caractères hexadécimaux')
-p.write_text(s); p.chmod(0o600)
+
 if not re.fullmatch(r'[a-z0-9.-]+', e['MATRIX_DOMAIN']):
     raise SystemExit('MATRIX_DOMAIN invalide')
 hosts = [e['MATRIX_DOMAIN'], e['TURN_HOST']]
@@ -32,8 +30,10 @@ for k in ('SYNAPSE_URL', 'ELEMENT_URL', 'RTC_URL'):
 # OpenID et autodécouverte du server_name utilisent 443.
 if int(e['HTTPS_PORT']) != 443:
     raise SystemExit('Ce profil exige HTTPS_PORT=443 pour OpenID et découverte Matrix. Voir README pour HAProxy.')
-if len({urlsplit(e[k]).hostname for k in ('SYNAPSE_URL','ELEMENT_URL','RTC_URL')}) != 3:
-    raise SystemExit('Utiliser trois noms DNS distincts pour Synapse, Element et RTC')
+if any(urlsplit(e[k]).hostname != e['MATRIX_DOMAIN'] for k in ('SYNAPSE_URL','ELEMENT_URL','RTC_URL')) or e['TURN_HOST'] != e['MATRIX_DOMAIN']:
+    raise SystemExit('Profil domaine unique : SYNAPSE_URL, ELEMENT_URL et RTC_URL=https://MATRIX_DOMAIN ; TURN_HOST=MATRIX_DOMAIN')
+if e['MATRIX_DOMAIN'] == 'exemple.fr' or e['MATRIX_DOMAIN'].endswith('.exemple.fr'):
+    raise SystemExit('Remplacer le domaine exemple.fr avant le rendu')
 if not all(re.fullmatch(r'[a-z0-9.-]+', h) for h in hosts):
     raise SystemExit('Noms DNS invalides')
 ipaddress.IPv4Address(e['SERVER_IP']); ipaddress.IPv4Address(e['BIND_IP'])
@@ -43,6 +43,41 @@ for k in ('HTTP_PORT HTTPS_PORT LIVEKIT_TCP_PORT LIVEKIT_UDP_START LIVEKIT_UDP_E
     if not 1 <= int(e[k]) <= 65535: raise SystemExit(f'Port invalide : {k}')
 a,b,c,d = [int(e[k]) for k in ('LIVEKIT_UDP_START','LIVEKIT_UDP_END','TURN_UDP_START','TURN_UDP_END')]
 if a>b or c>d or max(a,c)<=min(b,d): raise SystemExit('Plages UDP invalides ou chevauchantes')
+# Valider les ports locaux, les IP d'administration et l'identité avant toute écriture.
+local_ports = {'SYNAPSE_HTTP_PORT':'18008','ELEMENT_HTTP_PORT':'18080','JWT_HTTP_PORT':'18081','LIVEKIT_HTTP_PORT':'17880','KETESA_HTTP_PORT':'18082'}
+for key, default in local_ports.items():
+    e.setdefault(key, default)
+    if not e[key].isdigit() or not 1024 <= int(e[key]) <= 65535:
+        raise SystemExit(f'{key}: port local invalide')
+if len({int(e[key]) for key in local_ports}) != len(local_ports):
+    raise SystemExit('Les cinq ports HTTP locaux doivent être distincts')
+public_tcp = {int(e[key]) for key in ('HTTP_PORT','HTTPS_PORT','LIVEKIT_TCP_PORT','TURN_PORT','TURN_TLS_PORT')}
+if public_tcp & {int(e[key]) for key in local_ports}:
+    raise SystemExit('Un port HTTP local chevauche un port TCP public')
+admin_rules = []
+for key in ('ADMIN_VPN_IP','ADMIN_OFFICE_IP'):
+    if e.get(key):
+        net = ipaddress.ip_network(e[key], strict=False)
+        if net.prefixlen == 0:
+            raise SystemExit('Ne pas autoriser tout Internet dans '+key)
+        admin_rules.append('allow '+str(net)+';')
+old_config = P('configs/generated/synapse/homeserver.yaml')
+if old_config.exists() and json.loads(old_config.read_text())['server_name'] != e['MATRIX_DOMAIN']:
+    raise SystemExit('Refus de modifier server_name sur une installation initialisée')
+if args.update:
+    backup = P('backups') / ('configuration-'+datetime.datetime.now().strftime('%Y%m%d-%H%M%S-%f'))
+    backup.mkdir(parents=True, mode=0o700)
+    shutil.copy2(p, backup/'environment')
+    if P('configs/generated').exists():
+        shutil.copytree('configs/generated', backup/'generated')
+for k in ('POSTGRES_PASSWORD REGISTRATION_SHARED_SECRET MACAROON_SECRET FORM_SECRET '
+          'LIVEKIT_KEY LIVEKIT_SECRET TURN_SECRET AS_TOKEN HS_TOKEN').split():
+    if not e.get(k):
+        e[k] = secrets.token_hex(32)
+        s = re.sub(r'^' + k + r'=.*$', k + '=' + e[k], s, flags=re.M)
+    if not re.fullmatch('[a-fA-F0-9]{32,128}', e[k]):
+        raise SystemExit(f'{k}: utiliser 32 à 128 caractères hexadécimaux')
+p.write_text(s); p.chmod(0o600)
 for key, urlkey in [('SYNAPSE_HOST','SYNAPSE_URL'),('RTC_HOST','RTC_URL')]:
     value = urlsplit(e[urlkey]).hostname
     if re.search(r'^'+key+r'=', s, re.M):
@@ -52,18 +87,18 @@ p.write_text(s)
 root = P('configs/generated'); root.mkdir(parents=True, exist_ok=True)
 fingerprint = hashlib.sha256(p.read_bytes()).hexdigest()
 marker = root/'environment.sha256'
-if marker.exists() and marker.read_text().strip() != fingerprint:
+if not args.update and marker.exists() and marker.read_text().strip() != fingerprint:
     raise SystemExit('Configuration .env modifiée : aucun fichier généré écrasé. Voir README (reconfiguration).')
 def write(name, value):
     path = root/name; path.parent.mkdir(parents=True, exist_ok=True)
     if path.parent != root: path.parent.chmod(0o755)
     content = value if isinstance(value, str) else json.dumps(value, indent=2)+'\n'
-    if path.exists() and path.read_text() != content:
+    if not args.update and path.exists() and path.read_text() != content:
         raise SystemExit(f'{path} modifié : refus de l’écraser')
-    if not path.exists(): path.write_text(content)
+    if not path.exists() or args.update: path.write_text(content)
     # Répertoire parent protégé ; lecture nécessaire aux UID des conteneurs.
     path.chmod(0o644)
-for data_dir in ('synapse','tls','caddy','caddy-config'):
+for data_dir in ('synapse','tls'):
     P('data/'+data_dir).mkdir(parents=True, exist_ok=True)
 P('data/synapse').chmod(0o770)
 if os.geteuid() == 0:
@@ -89,7 +124,7 @@ for f in ('ca.crt','server.crt','server.key'):
 (tls/'server.key').chmod(0o644)
 (tls/'server.crt').chmod(0o644); (tls/'ca.crt').chmod(0o644)
 well = {'m.homeserver':{'base_url':e['SYNAPSE_URL']}, 'org.matrix.msc4143.rtc_foci':[{'type':'livekit','livekit_service_url':e['RTC_URL']+'/livekit/jwt'}]}
-write('reverse-proxy/client.json',well)
+write('nginx/client.json',well)
 write('synapse/rtc-registration.yaml',{'id':'matrixrtc','as_token':e['AS_TOKEN'],'hs_token':e['HS_TOKEN'],'sender_localpart':'_lk_jwt_service','url':None,'namespaces':{'users':[{'exclusive':False,'regex':'.*'}]},'io.element.msc4502.scopes':['urn:matrix:client:io.element.msc4502:rooms:is_joined'],'io.element.msc4512.proxy_prefix':'rtc/livekit','io.element.msc4512.proxy_url':'http://jwt:8080'})
 write('synapse/homeserver.yaml', {
  'server_name':e['MATRIX_DOMAIN'],'public_baseurl':e['SYNAPSE_URL']+'/', 'pid_file':'/data/homeserver.pid',
@@ -107,7 +142,7 @@ write('synapse/homeserver.yaml', {
  'turn_uris':[f"turn:{e['TURN_HOST']}:{e['TURN_PORT']}?transport=udp",f"turns:{e['TURN_HOST']}:{e['TURN_TLS_PORT']}?transport=tcp"],
  'turn_shared_secret':e['TURN_SECRET'],'turn_user_lifetime':'1h','turn_allow_guests':False})
 write('synapse/log.config',{'version':1,'formatters':{'simple':{'format':'%(asctime)s %(levelname)s %(name)s %(message)s'}},'handlers':{'console':{'class':'logging.StreamHandler','formatter':'simple'}},'root':{'level':'INFO','handlers':['console']},'disable_existing_loggers':False})
-write('element/config.json',{'default_server_config':well,'disable_custom_urls':True,'disable_guests':True,'disable_3pid_login':True,'default_federate':False,'brand':'Element POC','element_call':{'use_exclusively':True},'integrations_ui_url':None,'integrations_rest_url':None,'integrations_widgets_urls':[],'room_directory':{'servers':[e['MATRIX_DOMAIN']]},'permalink_prefix':e['ELEMENT_URL'],'setting_defaults':{'UIFeature.registration':False,'UIFeature.identityServer':False}})
+write('element/config.json',{'default_server_config':well,'disable_custom_urls':True,'disable_guests':True,'disable_3pid_login':True,'default_federate':False,'brand':'Element','element_call':{'use_exclusively':True},'integrations_ui_url':None,'integrations_rest_url':None,'integrations_widgets_urls':[],'room_directory':{'servers':[e['MATRIX_DOMAIN']]},'permalink_prefix':e['ELEMENT_URL'],'setting_defaults':{'UIFeature.registration':False,'UIFeature.identityServer':False}})
 write('livekit/livekit.yaml',{'port':7880,'bind_addresses':['0.0.0.0'],'rtc':{'tcp_port':int(e['LIVEKIT_TCP_PORT']),'port_range_start':a,'port_range_end':b,'node_ip':e['SERVER_IP'],'use_external_ip':False,'stun_servers':[e['TURN_HOST']+':'+e['TURN_PORT']],'turn_servers':[{'host':e['TURN_HOST'],'port':int(e['TURN_PORT']),'protocol':'udp','secret':e['TURN_SECRET']},{'host':e['TURN_HOST'],'port':int(e['TURN_TLS_PORT']),'protocol':'tls','secret':e['TURN_SECRET']}]},'keys':{e['LIVEKIT_KEY']:e['LIVEKIT_SECRET']},'room':{'auto_create':False,'max_participants':10},'webhook':{'api_key':e['LIVEKIT_KEY'],'urls':['http://jwt:8080/sfu_webhook']},'logging':{'level':'info'}})
 write('jwt.env','\n'.join(f'{k}={v}' for k,v in {'LIVEKIT_URL':e['RTC_URL'].replace('https://','wss://')+'/livekit/sfu','LIVEKIT_KEY':e['LIVEKIT_KEY'],'LIVEKIT_SECRET':e['LIVEKIT_SECRET'],'LIVEKIT_JWT_BIND':':8080','LIVEKIT_FULL_ACCESS_HOMESERVERS':e['MATRIX_DOMAIN'],'LIVEKIT_AS_REGISTRATION_FILE':'/registration.yaml','LIVEKIT_HS_SERVER_NAME':e['MATRIX_DOMAIN'],'LIVEKIT_CS_API_URL_OVERRIDES':e['MATRIX_DOMAIN']+'=http://synapse:8008','LIVEKIT_SANITY_CHECK_INTERVAL_SECONDS':'30'}.items())+'\n')
 write('coturn/turnserver.conf',f'''listening-port={e['TURN_PORT']}
@@ -131,81 +166,16 @@ no-software-attribute
 log-file=stdout
 simple-log
 ''')
-syn,el,rtc=[urlsplit(e[k]).hostname for k in ('SYNAPSE_URL','ELEMENT_URL','RTC_URL')]
-server_discovery = ' handle /.well-known/matrix/server {\n  header Content-Type application/json\n  respond `' + json.dumps({'m.server': syn + ':443'}) + '` 200\n }\n'
-identity = '' if e['MATRIX_DOMAIN']==syn else f'''
-{e['MATRIX_DOMAIN']} {{
- tls /tls/server.crt /tls/server.key
-{server_discovery}
- handle /.well-known/matrix/client {{
-  header Access-Control-Allow-Origin *
-  header Content-Type application/json
-  rewrite * /client.json
-  root * /srv
-  file_server
- }}
- handle /_matrix/federation/v1/openid/userinfo {{
-  reverse_proxy synapse:8008
- }}
- handle {{
-  respond 404
- }}
-}}
-'''
-write('reverse-proxy/Caddyfile',f'''{{
- auto_https disable_redirects
-}}
-http:// {{
- redir https://{{host}}{{uri}} permanent
-}}
-{syn} {{
- tls /tls/server.crt /tls/server.key
-{server_discovery}
- handle /.well-known/matrix/client {{
-  header Access-Control-Allow-Origin *
-  header Content-Type application/json
-  root * /srv
-  rewrite * /client.json
-  file_server
- }}
- @openid path /_matrix/federation/v1/openid/userinfo
- handle @openid {{
-  reverse_proxy synapse:8008
- }}
- @client path /_matrix/client/* /_matrix/media/* /_synapse/client/*
- handle @client {{
-  request_body {{
-   max_size 100MB
-  }}
-  reverse_proxy synapse:8008
- }}
- handle {{
-  respond 404
- }}
-}}
-{el} {{
- tls /tls/server.crt /tls/server.key
- reverse_proxy element:80
-}}
-{rtc} {{
- tls /tls/server.crt /tls/server.key
- handle_path /livekit/jwt/* {{
-  reverse_proxy jwt:8080
- }}
- handle_path /livekit/sfu/* {{
-  reverse_proxy livekit:7880
- }}
- handle /livekit/sfu {{
-  rewrite * /
-  reverse_proxy livekit:7880
- }}
- handle {{
-  respond 404
- }}
-}}
-{identity}
-import /etc/caddy/ketesa.caddy
-import /etc/caddy/alerts.caddy
-''')
+write('ketesa/config.json', {'restrictBaseUrl':e['SYNAPSE_URL'], 'wellKnownDiscovery':False, 'asManagedUsers':['^@_lk_jwt_service:']})
+template = P('configs/nginx/matrix.conf.template').read_text()
+replacements = {'DOMAIN':e['MATRIX_DOMAIN'], 'TLS_CERT':str((P.cwd()/'data/tls/server.crt').resolve()), 'TLS_KEY':str((P.cwd()/'data/tls/server.key').resolve()), 'ADMIN_ALLOW_RULES':'\n        '.join(admin_rules) or '# Aucune IP autorisée : administration bloquée.'}
+replacements.update({key:e[key] for key in local_ports})
+for key, value in replacements.items():
+    template = template.replace('__'+key+'__',value)
+if re.search(r'__[A-Z_]+__',template):
+    raise SystemExit('Variable Nginx non remplacée')
+write('nginx/matrix.conf', template)
 marker.write_text(fingerprint+'\n')
-print('Configurations générées ; secrets conservés. Clé Synapse créée au premier démarrage.')
+print('Configurations générées ; secrets conservés. Aucun proxy Docker. Vhost : configs/generated/nginx/matrix.conf')
+if not admin_rules:
+    print('Administration bloquée par défaut : remplir ADMIN_VPN_IP / ADMIN_OFFICE_IP puis render.py --update.')

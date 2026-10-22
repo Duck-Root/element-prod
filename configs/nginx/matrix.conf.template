@@ -1,8 +1,8 @@
 # Vhost Nginx pour un domaine unique, sans Tailscale.
 # Charger dans le contexte http (par exemple /etc/nginx/conf.d/matrix.conf).
-# Hypothèse : Nginx et les cinq services amont partagent le même réseau Docker.
-# À remplacer partout : nomdedomaine.fr et les deux IP d'administration ci-dessous.
-# Monter le certificat et sa clé dans /tls/server.crt et /tls/server.key.
+# Hypothèse : Nginx est installé sur cet hôte et joint les ports loopback publiés par Docker.
+# À remplacer partout : __DOMAIN__ et les deux IP d'administration ci-dessous.
+# Monter le certificat et sa clé dans __TLS_CERT__ et __TLS_KEY__.
 
 map $http_upgrade $matrix_connection_upgrade {
     default upgrade;
@@ -11,20 +11,20 @@ map $http_upgrade $matrix_connection_upgrade {
 
 server {
     listen 80;
-    server_name nomdedomaine.fr;
+    server_name __DOMAIN__;
 
     # Ce vhost suppose un certificat déjà émis (par exemple via DNS-01).
     # Il ne fournit pas de webroot pour le challenge ACME HTTP-01.
-    return 301 https://nomdedomaine.fr$request_uri;
+    return 301 https://__DOMAIN__$request_uri;
 }
 
 server {
     listen 443 ssl;
-    server_name nomdedomaine.fr;
+    server_name __DOMAIN__;
     server_tokens off;
 
-    ssl_certificate     /tls/server.crt;
-    ssl_certificate_key /tls/server.key;
+    ssl_certificate     __TLS_CERT__;
+    ssl_certificate_key __TLS_KEY__;
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_session_cache shared:MatrixTLS:10m;
     ssl_session_timeout 1d;
@@ -49,46 +49,45 @@ server {
     proxy_set_header Connection $matrix_connection_upgrade;
 
     # Découverte : convient à une installation neuve dont le server_name
-    # est nomdedomaine.fr. Ne pas renommer l'identité d'une base existante.
+    # est __DOMAIN__. Ne pas renommer l'identité d'une base existante.
     location = /.well-known/matrix/server {
         default_type application/json;
-        return 200 '{"m.server":"nomdedomaine.fr:443"}';
+        return 200 '{"m.server":"__DOMAIN__:443"}';
     }
 
     location = /.well-known/matrix/client {
         default_type application/json;
         add_header Access-Control-Allow-Origin "*" always;
-        return 200 '{"m.homeserver":{"base_url":"https://nomdedomaine.fr"},"org.matrix.msc4143.rtc_foci":[{"type":"livekit","livekit_service_url":"https://nomdedomaine.fr/livekit/jwt"}]}';
+        return 200 '{"m.homeserver":{"base_url":"https://__DOMAIN__"},"org.matrix.msc4143.rtc_foci":[{"type":"livekit","livekit_service_url":"https://__DOMAIN__/livekit/jwt"}]}';
     }
 
     # Exception OpenID nécessaire aux appels ; ne pas journaliser ses jetons.
     location = /_matrix/federation/v1/openid/userinfo {
         access_log off;
-        proxy_pass http://synapse:8008;
+        proxy_pass http://127.0.0.1:__SYNAPSE_HTTP_PORT__;
     }
 
     # API publique : conserver intégralement les chemins Matrix/Synapse.
     location ^~ /_matrix/client/ {
-        proxy_pass http://synapse:8008;
+        proxy_pass http://127.0.0.1:__SYNAPSE_HTTP_PORT__;
     }
 
     location ^~ /_matrix/media/ {
-        proxy_pass http://synapse:8008;
+        proxy_pass http://127.0.0.1:__SYNAPSE_HTTP_PORT__;
     }
 
     location ^~ /_synapse/client/ {
-        proxy_pass http://synapse:8008;
+        proxy_pass http://127.0.0.1:__SYNAPSE_HTTP_PORT__;
     }
 
     # ADMINISTRATION : IP publiques de SORTIE du VPN et des bureaux.
-    # Ces deux adresses sont des EXEMPLES réservés à la documentation.
-    # Les remplacer aux DEUX endroits, ici et dans /admin/.
+    # Les IP autorisées sont générées depuis ADMIN_VPN_IP / ADMIN_OFFICE_IP.
+    # Si elles sont vides, deny all bloque tout accès administratif.
     location ^~ /_synapse/admin/ {
-        allow 198.51.100.10/32; # À REMPLACER : IP publique de sortie du VPN pro
-        allow 203.0.113.20/32;  # À REMPLACER : IP publique des bureaux
+        __ADMIN_ALLOW_RULES__
         deny all;
 
-        proxy_pass http://synapse:8008;
+        proxy_pass http://127.0.0.1:__SYNAPSE_HTTP_PORT__;
     }
 
     # Bloquer les autres routes internes et la fédération générale.
@@ -99,17 +98,17 @@ server {
 
     # JWT : /livekit/jwt/sfu/get devient /sfu/get sur le service JWT.
     location /livekit/jwt/ {
-        proxy_pass http://jwt:8080/;
+        proxy_pass http://127.0.0.1:__JWT_HTTP_PORT__/;
     }
 
     # LiveKit : supprimer le préfixe public avant de joindre le backend.
     # Gérer aussi l'URL sans slash final pour la connexion WebSocket.
     location = /livekit/sfu {
-        proxy_pass http://livekit:7880/;
+        proxy_pass http://127.0.0.1:__LIVEKIT_HTTP_PORT__/;
     }
 
     location /livekit/sfu/ {
-        proxy_pass http://livekit:7880/;
+        proxy_pass http://127.0.0.1:__LIVEKIT_HTTP_PORT__/;
     }
 
     # Le redirect ne livre aucun contenu d'administration.
@@ -119,17 +118,16 @@ server {
 
     # Ketesa doit être construit pour le chemin /admin.
     location ^~ /admin/ {
-        allow 198.51.100.10/32; # À REMPLACER : IP publique de sortie du VPN pro
-        allow 203.0.113.20/32;  # À REMPLACER : IP publique des bureaux
+        __ADMIN_ALLOW_RULES__
         deny all;
 
         # L'application est servie à la racine du conteneur ; ses URL
         # publiques sont construites pour /admin. Retirer donc le préfixe.
-        proxy_pass http://ketesa:8080/;
+        proxy_pass http://127.0.0.1:__KETESA_HTTP_PORT__/;
     }
 
     # Interface de messagerie Element, à la racine du domaine.
     location / {
-        proxy_pass http://element:80;
+        proxy_pass http://127.0.0.1:__ELEMENT_HTTP_PORT__;
     }
 }

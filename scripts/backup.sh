@@ -5,16 +5,16 @@ umask 077
 [[ $EUID -eq 0 ]] || { echo 'Root requis pour lire les volumes.' >&2; exit 1; }
 mkdir -p backups
 out="$(mktemp -d "backups/$(date -u +%Y%m%dT%H%M%SZ)-XXXXXX")"
-# Refuser une sauvegarde ambiguë d'une stack déjà partiellement arrêtée.
-for service in postgres synapse proxy jwt; do
+for service in postgres synapse jwt; do
   [[ -n $(dc ps --status running -q "$service") ]] || { echo "$service arrêté : abandon" >&2; exit 1; }
 done
-resume() { dc up -d postgres synapse jwt proxy; }
+# Nginx est sur l’hôte : ne pas arrêter ses autres vhosts.
+# Synapse arrêté coupe les écritures Matrix pendant le dump et l’archive médias.
+resume() { dc up -d postgres synapse jwt; }
 trap resume EXIT
-# Couper les écritures et appels entrants avant la base et les médias.
-dc stop proxy jwt synapse
+dc stop jwt synapse
 dc exec -T postgres pg_dump -U synapse -d synapse --format=custom > "$out/synapse.dump"
-# Ne pas archiver le répertoire PostgreSQL vivant : le dump fait autorité.
-tar --numeric-owner -czf "$out/files.tar.gz" .env compose.yaml compose.acme.yaml configs scripts data/synapse data/tls data/caddy data/caddy-config data/acme
+tar --numeric-owner -czf "$out/files.tar.gz" .env compose.yaml compose.acme.yaml configs scripts data/synapse data/tls data/acme
 (cd "$out" && sha256sum synapse.dump files.tar.gz > SHA256SUMS)
-echo "Sauvegarde cohérente : $out (contient secrets et données privées)."
+echo "Sauvegarde cohérente : $out (secrets inclus). Nginx hôte n’a pas été arrêté."
+echo 'Sauvegarder aussi /etc/nginx et la configuration de votre gestionnaire de certificats externe.'
