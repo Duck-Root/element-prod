@@ -1,0 +1,12 @@
+[Unit]
+Description=Renouvellement HTTPS Matrix production
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/core/docker/Element_Matrix/matric-poc-prod
+ExecStart=/usr/bin/python3 /core/docker/Element_Matrix/matric-poc-prod/scripts/tls.py renew
+TimeoutStartSec=15min
+UMask=0077

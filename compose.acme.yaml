@@ -1,0 +1,7 @@
+services:
+  acme:
+    image: goacme/lego:v4.26.0
+    volumes:
+      - ./data/acme:/acme
+    ports:
+      - '0.0.0.0:80:80/tcp'

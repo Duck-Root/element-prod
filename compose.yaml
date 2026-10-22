@@ -1,0 +1,107 @@
+name: ${COMPOSE_PROJECT_NAME:-matric-poc-prod}
+x-common: &common
+  restart: unless-stopped
+  networks: [matrix]
+  logging:
+    driver: json-file
+    options: {max-size: 10m, max-file: '3'}
+services:
+  postgres:
+    <<: *common
+    image: ${POSTGRES_IMAGE}
+    environment:
+      POSTGRES_DB: synapse
+      POSTGRES_USER: synapse
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Run python3 scripts/render.py}
+      POSTGRES_INITDB_ARGS: --encoding=UTF8 --locale=C
+    volumes: [./data/postgres:/var/lib/postgresql/data]
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U synapse -d synapse']
+      interval: 10s
+      timeout: 5s
+      retries: 12
+  synapse:
+    <<: *common
+    image: ${SYNAPSE_IMAGE}
+    environment:
+      SYNAPSE_CONFIG_PATH: /config/homeserver.yaml
+      UID: '991'
+      GID: '991'
+    volumes:
+      - ./configs/generated/synapse:/config:ro
+      - ./data/synapse:/data
+    depends_on:
+      postgres: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://localhost:8008/health', timeout=5)"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+  element:
+    <<: *common
+    image: ${ELEMENT_IMAGE}
+    volumes: [./configs/generated/element/config.json:/app/config.json:ro]
+  jwt:
+    <<: *common
+    image: ${JWT_IMAGE}
+    env_file: ./configs/generated/jwt.env
+    environment:
+      SSL_CERT_FILE: /tls/ca.crt
+    volumes:
+      - ./data/tls/ca.crt:/tls/ca.crt:ro
+      - ./configs/generated/synapse/rtc-registration.yaml:/registration.yaml:ro
+    depends_on:
+      synapse: {condition: service_healthy}
+      livekit: {condition: service_started}
+  livekit:
+    <<: *common
+    image: ${LIVEKIT_IMAGE}
+    command: [--config, /etc/livekit.yaml]
+    volumes: [./configs/generated/livekit/livekit.yaml:/etc/livekit.yaml:ro]
+    ports:
+      - '${BIND_IP}:${LIVEKIT_TCP_PORT}:${LIVEKIT_TCP_PORT}/tcp'
+      - '${BIND_IP}:${LIVEKIT_UDP_START}-${LIVEKIT_UDP_END}:${LIVEKIT_UDP_START}-${LIVEKIT_UDP_END}/udp'
+  coturn:
+    <<: *common
+    image: ${COTURN_IMAGE}
+    command: [-c, /etc/turnserver.conf]
+    volumes:
+      - ./configs/generated/coturn/turnserver.conf:/etc/turnserver.conf:ro
+      - ./data/tls:/tls:ro
+    ports:
+      - '${BIND_IP}:${TURN_PORT}:${TURN_PORT}/udp'
+      - '${BIND_IP}:${TURN_PORT}:${TURN_PORT}/tcp'
+      - '${BIND_IP}:${TURN_TLS_PORT}:${TURN_TLS_PORT}/tcp'
+      - '${BIND_IP}:${TURN_UDP_START}-${TURN_UDP_END}:${TURN_UDP_START}-${TURN_UDP_END}/udp'
+  proxy:
+    <<: *common
+    networks:
+      matrix:
+        aliases:
+          - ${MATRIX_DOMAIN}
+          - ${SYNAPSE_HOST:-matrix.poc.test}
+          - ${RTC_HOST:-rtc.poc.test}
+    image: ${CADDY_IMAGE}
+    volumes:
+      - ./configs/generated/reverse-proxy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./configs/reverse-proxy/ketesa.caddy:/etc/caddy/ketesa.caddy:ro
+      - ./configs/reverse-proxy/alerts.caddy:/etc/caddy/alerts.caddy:ro
+      - ./configs/generated/reverse-proxy/client.json:/srv/client.json:ro
+      - ./data/tls:/tls:ro
+      - ./data/caddy:/data
+      - ./data/caddy-config:/config
+    ports:
+      - '${BIND_IP}:${HTTP_PORT}:80/tcp'
+      - '${BIND_IP}:${HTTPS_PORT}:443/tcp'
+    depends_on:
+      synapse: {condition: service_healthy}
+      element: {condition: service_started}
+      jwt: {condition: service_started}
+    healthcheck:
+      test: [CMD, wget, -q, -O, /dev/null, 'http://127.0.0.1:2019/config/']
+      interval: 15s
+      timeout: 5s
+      retries: 10
+networks:
+  matrix:
+    driver: bridge

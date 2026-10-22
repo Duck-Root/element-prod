@@ -1,0 +1,74 @@
+# Secrets et paramètres propres à chaque déploiement
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.env
+*.env.*
+!*.env.example
+!*.env.*.example
+**/secrets/
+**/credentials/
+matrix-webhook-password
+setup-state.json
+
+# Données persistantes Docker et configurations générées privées
+**/data/**
+!**/data/.gitkeep
+**/configs/generated/
+
+# Certificats, clés privées et états ACME
+*.key
+*.pem
+*.crt
+*.cer
+*.der
+*.p12
+*.pfx
+*.csr
+*.srl
+**/.lego/
+**/.acme.sh/
+
+# Sauvegardes, exports et copies avant modification
+**/backups/
+*.before-*
+*.bak
+*.backup
+*.old
+*.dump
+*.sql.gz
+*.sql.zst
+*.tar
+*.tar.gz
+*.tgz
+*.zip
+
+# Journaux et fichiers temporaires
+*.log
+*.pid
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+
+# Caches Python et environnements locaux
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Métadonnées locales des outils et du poste
+.agents/
+.codex/
+.aws/
+.ssh/
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Les Compose, scripts, modèles *.example, fragments Caddy,
+# unités systemd et documents restent versionnés.
