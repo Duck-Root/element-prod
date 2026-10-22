@@ -150,6 +150,10 @@ sauvegarde du POC. Ne pas copier son `.env`, son `configs/generated/` ou son `da
 
 ## 6. Renseigner la configuration
 
+**Guide détaillé : [REMPLIR-ENV.md](REMPLIR-ENV.md)**. Il explique chaque URL,
+la différence entre IP publique et locale, les ports, images et secrets. Les trois
+URL servent trois fonctions sur la même machine, pas trois serveurs différents.
+
 ```bash
 nano .env
 ```

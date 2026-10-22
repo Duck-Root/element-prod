@@ -2,7 +2,10 @@
 
 Installation vide : aucun compte, salon, secret ou média du POC n’est repris.
 
-Lire `DEPLOIEMENT.md` pour la procédure complète. Les chemins de ce dossier et des
+Pour remplir les URL et comprendre chaque paramètre, commencer par
+**[REMPLIR-ENV.md](REMPLIR-ENV.md)** (exemple avec votre domaine DuckDNS inclus).
+
+Lire [DEPLOIEMENT.md](DEPLOIEMENT.md) pour la procédure complète. Les chemins de ce dossier et des
 unités systemd sont adaptés à `/core/docker/Element_Matrix/matric-poc-prod`.
 
 Avant de démarrer : choisir trois domaines distincts, renseigner leur DNS et
