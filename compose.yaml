@@ -1,3 +1,6 @@
+# Coexistence : autres services en TCP 3306, 5100, 8090 et 8443.
+# Aucun de ces ports n'est publié par ce Compose ; voir RESERVED_TCP_PORTS dans .env.
+# Nginx hôte partage 80/443 via ses vhosts. Les backends HTTP restent sur 127.0.0.1.
 name: ${COMPOSE_PROJECT_NAME:-matric-poc-prod}
 x-common: &common
   restart: unless-stopped

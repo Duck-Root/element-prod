@@ -72,6 +72,42 @@ Les ports locaux par défaut sont 18008 (Synapse), 18080 (Element), 18081 (JWT),
 17880 (LiveKit HTTP) et 18082 (Ketesa). Vérifier qu’ils sont libres avec `ss -lnt`.
 Ils sont toujours publiés sur `127.0.0.1`, indépendamment de `BIND_IP`.
 
+### 2.1 Vérifier la coexistence sur le serveur distant
+
+Les ports TCP 3306 (MariaDB), 5100 (Password Pusher), 8090 (alert-monitor) et
+8443 (Vaultwarden) sont déjà utilisés. Le profil Matrix utilise des ports distincts :
+
+| Service Matrix | Port publié sur l’hôte | Port dans le conteneur |
+|---|---|---|
+| Synapse HTTP | `127.0.0.1:18008` | 8008/TCP |
+| Element HTTP | `127.0.0.1:18080` | 80/TCP |
+| JWT HTTP | `127.0.0.1:18081` | 8080/TCP |
+| LiveKit HTTP / WebSocket | `127.0.0.1:17880` | 7880/TCP |
+| Ketesa HTTP | `127.0.0.1:18082` | 8080/TCP |
+
+Les ports média restent ceux de l’étape 3. Aucun port publié de la liste existante
+ne chevauche ce profil. Le modèle inclut :
+
+```dotenv
+RESERVED_TCP_PORTS=3306,5100,8090,8443
+```
+
+Le générateur refusera une nouvelle configuration Matrix qui réutiliserait ces
+ports TCP. Cette vérification compare la configuration à la liste déclarée, sans
+se connecter au serveur distant. Compléter la liste si d’autres ports sont occupés.
+
+Sur le serveur de production, avant démarrage :
+
+```bash
+ss -lntup
+docker ps --format 'table {{.Names}}\t{{.Ports}}'
+```
+
+Les affichages `80/tcp` ou `443/tcp` sans flèche `->` sont internes aux conteneurs,
+et ne réservent pas les ports de l’hôte. Le Nginx hôte existant peut servir plusieurs
+domaines sur les mêmes ports 80/443 : ajouter seulement le vhost Matrix, sans
+remplacer ses autres sites ou lancer un autre proxy.
+
 ## 3. Préparer le réseau public
 
 | Protocole | Ports | Destination |

@@ -227,6 +227,34 @@ proxy ou un CDN est placé devant, la gestion de l’IP réelle doit être adapt
 une liste stricte de proxies de confiance. Un VPN en split tunneling ne convient
 que si le trafic destiné à la plateforme emprunte bien sa sortie professionnelle.
 
+### 4.5 Coexistence avec les autres applications du serveur
+
+Le serveur de production héberge déjà ces publications TCP :
+
+| Application existante | Port sur l’hôte |
+|---|---:|
+| MariaDB de Password Pusher | 3306 |
+| Password Pusher | 5100 |
+| alert-monitor | 8090 |
+| Vaultwarden | 8443 |
+
+Les ports Matrix documentés ci-dessus sont distincts de ces quatre valeurs ; aucun
+changement de port n’est nécessaire pour cette liste. `RESERVED_TCP_PORTS` vaut
+`3306,5100,8090,8443` dans le modèle et déclare ces ports comme indisponibles pour
+les publications TCP de cette stack. Le générateur refuse leur réutilisation pour
+un backend HTTP, LiveKit TCP ou TURN TCP. Adapter cette liste si les services changent.
+
+Dans `docker ps`, `0.0.0.0:8443->8080/tcp` réserve le **8443 de l’hôte**, tandis que
+`80/tcp` ou `443/tcp` affiché sans adresse ni flèche désigne seulement un port du
+conteneur. Plusieurs conteneurs peuvent utiliser leur propre port interne 80 ou
+8080 ; cela ne réserve pas ces ports sur l’hôte. Les espaces TCP et UDP sont distincts.
+
+Nginx installé sur le serveur conserve ses écoutes 80/443 et reçoit un vhost pour le
+nouveau domaine : il n’y a ni second processus proxy ni publication Docker 80/443.
+Le DNS de ce vhost doit être distinct de celui des autres sites configurés.
+La liste fournie ne recense pas forcément tous les ports de la machine ; confirmer
+les écoutes réelles sur le serveur distant avant le démarrage.
+
 ## 5. Parcours d’un message ou d’un fichier
 
 1. Le navigateur télécharge l’interface Element depuis Nginx.

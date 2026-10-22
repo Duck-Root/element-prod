@@ -54,6 +54,20 @@ if len({int(e[key]) for key in local_ports}) != len(local_ports):
 public_tcp = {int(e[key]) for key in ('HTTP_PORT','HTTPS_PORT','LIVEKIT_TCP_PORT','TURN_PORT','TURN_TLS_PORT')}
 if public_tcp & {int(e[key]) for key in local_ports}:
     raise SystemExit('Un port HTTP local chevauche un port TCP public')
+# Ports TCP publiés par les autres applications du serveur : ne pas les réutiliser.
+reserved_tcp = set()
+for item in e.get('RESERVED_TCP_PORTS', '').split(','):
+    item = item.strip()
+    if not item:
+        continue
+    if not item.isdigit() or not 1 <= int(item) <= 65535:
+        raise SystemExit('RESERVED_TCP_PORTS : liste de ports TCP de 1 à 65535, séparés par des virgules')
+    reserved_tcp.add(int(item))
+published_tcp = {int(e[key]) for key in local_ports} | {int(e[key]) for key in ('LIVEKIT_TCP_PORT','TURN_PORT','TURN_TLS_PORT')}
+conflicts = reserved_tcp & published_tcp
+if conflicts:
+    raise SystemExit('Ports TCP déjà réservés sur le serveur : '+', '.join(map(str,sorted(conflicts)))+'. Choisir d’autres ports Matrix.')
+# HTTP_PORT/HTTPS_PORT sont portés par le Nginx hôte partagé : pas par Docker.
 admin_rules = []
 for key in ('ADMIN_VPN_IP','ADMIN_OFFICE_IP'):
     if e.get(key):

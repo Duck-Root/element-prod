@@ -83,6 +83,23 @@ Les cinq ports doivent être distincts et ne pas chevaucher les ports TCP public
 `HTTP_PORT=80` et `HTTPS_PORT=443` décrivent le point d’entrée Nginx hôte ; Docker
 ne publie aucun de ces ports. Le profil exige HTTPS sur 443 pour la découverte.
 
+## Ports déjà utilisés par les autres applications
+
+```dotenv
+RESERVED_TCP_PORTS=3306,5100,8090,8443
+```
+
+Cette liste correspond à MariaDB, Password Pusher, alert-monitor et Vaultwarden.
+Le rendu refuse d’utiliser l’un de ces ports pour une publication TCP de Matrix.
+Elle ne change pas les applications existantes et n’ajoute aucune règle de pare-feu.
+Les ports Matrix actuels (18008, 18080, 18081, 17880, 18082, 7881, 3478, 5349)
+ne chevauchent pas la liste : conserver leurs valeurs.
+
+Mettre à jour cette liste sur un autre serveur ou si vous ajoutez des applications.
+Les valeurs sont séparées par des virgules. Les ports UDP ne sont pas concernés
+par cette liste TCP. Les ports 80/443 du Nginx hôte sont partagés par les vhosts,
+et ne sont pas des publications Docker Matrix.
+
 ## Ports média publics : à conserver dans le pare-feu/NAT
 
 ```dotenv

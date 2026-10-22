@@ -37,6 +37,11 @@ un éventuel ancien vhost du même domaine, après sauvegarde. Ne pas désactive
 autres sites du serveur. Ce fichier doit être chargé dans le contexte `http` de
 Nginx ; l’installation Debian standard inclut `sites-enabled` dans ce contexte.
 
+Les ports TCP 3306, 5100, 8090 et 8443 sont déjà publiés par d’autres applications.
+Aucun backend du vhost Matrix ne les utilise. Conserver les ports loopback proposés,
+et ajouter le vhost au Nginx existant sans changer les autres sites. Les ports HTTP
+internes 80/8080 des conteneurs ne sont pas des réservations sur l’hôte.
+
 Le vhost lit les certificats dans le chemin absolu `data/tls` de ce projet. Le
 processus maître Nginx doit pouvoir les lire (installation standard avec maître root).
 Le vhost ne monte aucun fichier dans un conteneur Nginx : il n’y en a pas.
