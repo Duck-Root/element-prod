@@ -2,7 +2,7 @@
 # Exemple à adapter, puis installer parmi les deploy-hooks du gestionnaire externe.
 set -eu
 STACK_DIR=/core/docker/Element_Matrix/matric-poc-prod
-TLS_CERT_DIR=/etc/letsencrypt/live/VOTRE_DOMAINE
+TLS_CERT_DIR=/etc/letsencrypt/live/chat.pro-gx.fr
 
 case "$TLS_CERT_DIR" in
   */VOTRE_DOMAINE)

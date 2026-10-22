@@ -12,15 +12,15 @@ nano .env
 
 ## Un seul nom public pour les fonctions web
 
-Exemple générique à adapter à votre domaine réel (ne pas conserver `exemple.fr`) :
+Le domaine de production est prérempli avec **chat.pro-gx.fr** :
 
 ```dotenv
 COMPOSE_PROJECT_NAME=matrix-prod
-MATRIX_DOMAIN=matrix.exemple.fr
-SYNAPSE_URL=https://matrix.exemple.fr
-ELEMENT_URL=https://matrix.exemple.fr
-RTC_URL=https://matrix.exemple.fr
-TURN_HOST=matrix.exemple.fr
+MATRIX_DOMAIN=chat.pro-gx.fr
+SYNAPSE_URL=https://chat.pro-gx.fr
+ELEMENT_URL=https://chat.pro-gx.fr
+RTC_URL=https://chat.pro-gx.fr
+TURN_HOST=chat.pro-gx.fr
 SERVER_IP=88.169.112.139
 BIND_IP=0.0.0.0
 ```

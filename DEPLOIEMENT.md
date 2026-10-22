@@ -32,7 +32,7 @@ Les commandes suivantes s’exécutent en root dans ce dossier, sauf indication 
 Le répertoire est privé car il contiendra les clés et secrets.
 
 Choisir un **seul domaine définitif** pour cette installation neuve. Exemple :
-`matrix.exemple.fr`. Le DNS doit pointer vers l’IPv4
+`chat.pro-gx.fr`. Le DNS doit pointer vers l’IPv4
 publique de production. Le domaine devient le suffixe des comptes ; ne pas le changer
 après création d’une base. Ne pas publier d’AAAA non fonctionnel.
 
@@ -52,11 +52,11 @@ Voir [REMPLIR-ENV.md](REMPLIR-ENV.md). Exemple :
 
 ```dotenv
 COMPOSE_PROJECT_NAME=matrix-prod
-MATRIX_DOMAIN=matrix.exemple.fr
-SYNAPSE_URL=https://matrix.exemple.fr
-ELEMENT_URL=https://matrix.exemple.fr
-RTC_URL=https://matrix.exemple.fr
-TURN_HOST=matrix.exemple.fr
+MATRIX_DOMAIN=chat.pro-gx.fr
+SYNAPSE_URL=https://chat.pro-gx.fr
+ELEMENT_URL=https://chat.pro-gx.fr
+RTC_URL=https://chat.pro-gx.fr
+TURN_HOST=chat.pro-gx.fr
 SERVER_IP=88.169.112.139
 BIND_IP=0.0.0.0
 ADMIN_VPN_IP=
@@ -140,8 +140,8 @@ Exemple avec les fichiers d’un gestionnaire utilisant l’arborescence Let's E
 
 ```bash
 python3 scripts/tls.py install \
-  --cert /etc/letsencrypt/live/VOTRE_DOMAINE/fullchain.pem \
-  --key /etc/letsencrypt/live/VOTRE_DOMAINE/privkey.pem
+  --cert /etc/letsencrypt/live/chat.pro-gx.fr/fullchain.pem \
+  --key /etc/letsencrypt/live/chat.pro-gx.fr/privkey.pem
 ```
 
 Remplacer les chemins par ceux de votre environnement. Le script vérifie le domaine,
@@ -237,12 +237,12 @@ curl --fail http://127.0.0.1:18081/healthz
 Avec votre domaine et depuis un réseau extérieur :
 
 ```bash
-curl --fail https://VOTRE_DOMAINE/_matrix/client/versions
-curl --fail https://VOTRE_DOMAINE/.well-known/matrix/client
-curl --fail https://VOTRE_DOMAINE/livekit/jwt/healthz
+curl --fail https://chat.pro-gx.fr/_matrix/client/versions
+curl --fail https://chat.pro-gx.fr/.well-known/matrix/client
+curl --fail https://chat.pro-gx.fr/livekit/jwt/healthz
 ```
 
-Element doit s’ouvrir sur `https://VOTRE_DOMAINE/` sans avertissement TLS.
+Element doit s’ouvrir sur `https://chat.pro-gx.fr/` sans avertissement TLS.
 `/_matrix/federation/v1/version` doit renvoyer 404. La fédération générale reste
 fermée ; l’exception OpenID nécessaire aux appels est accessible.
 
@@ -289,8 +289,8 @@ Avec Certbot, exemple de deploy-hook à adapter :
 #!/bin/sh
 set -eu
 /usr/bin/python3 /core/docker/Element_Matrix/matric-poc-prod/scripts/tls.py install \
-  --cert /etc/letsencrypt/live/VOTRE_DOMAINE/fullchain.pem \
-  --key /etc/letsencrypt/live/VOTRE_DOMAINE/privkey.pem
+  --cert /etc/letsencrypt/live/chat.pro-gx.fr/fullchain.pem \
+  --key /etc/letsencrypt/live/chat.pro-gx.fr/privkey.pem
 ```
 
 Un modèle prêt à adapter est disponible dans
@@ -300,7 +300,7 @@ Il filtre aussi les autres certificats si Certbot utilise un hook global.
 Enregistrer le script adapté dans `/etc/letsencrypt/renewal-hooks/deploy/matrix-stack.sh`,
 réservé à root et exécutable (`chmod 0700`). Employer les chemins absolus réels du
 certificat. Avec un autre gestionnaire, configurer le même appel après renouvellement.
-Ne pas installer de hook contenant littéralement `VOTRE_DOMAINE`.
+Vérifier le chemin réel du certificat : le répertoire de votre gestionnaire peut porter un autre nom ou un suffixe, par exemple `chat.pro-gx.fr-0001`.
 
 Tester manuellement la commande `tls.py install` avec les chemins réels avant de
 l’ajouter au mécanisme de renouvellement. Si les fichiers sont identiques et déjà
@@ -322,8 +322,8 @@ Vérifier le certificat installé et celui réellement servi au domaine :
 
 ```bash
 openssl x509 -in data/tls/server.crt -noout -dates -issuer
-# Remplacer VOTRE_DOMAINE par votre vrai nom DNS :
-openssl s_client -connect VOTRE_DOMAINE:443 -servername VOTRE_DOMAINE </dev/null 2>/dev/null | openssl x509 -noout -dates -issuer
+# Vérifier le certificat servi par le domaine de production :
+openssl s_client -connect chat.pro-gx.fr:443 -servername chat.pro-gx.fr </dev/null 2>/dev/null | openssl x509 -noout -dates -issuer
 ```
 
 Adapter le chemin du hook si le projet est déplacé. Une sauvegarde de la stack ne

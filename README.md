@@ -22,6 +22,21 @@ sont détaillés dans les documents suivants.
 | [Configuration Nginx](configs/nginx/README.md) | Comprendre le routage web et installer le vhost généré |
 | [Compose applicatif](compose.yaml) | Définition des sept services Docker, de leurs dépendances et de leurs volumes |
 
+## Accès prévu en production
+
+Le domaine est prérempli avec **`chat.pro-gx.fr`** dans `.env` et `.env.example`.
+
+| Usage | Adresse |
+|---|---|
+| Interface Element | https://chat.pro-gx.fr/ |
+| Administration Ketesa, depuis les IP autorisées | https://chat.pro-gx.fr/admin/ |
+| Identifiant d’un utilisateur | `@alice:chat.pro-gx.fr` |
+
+Ce préremplissage ne crée pas le DNS et n’active pas le vhost. Faire pointer le domaine
+vers l’IP publique de production, vérifier `SERVER_IP` et renseigner les IP publiques
+de sortie VPN/bureaux. Le certificat doit couvrir `chat.pro-gx.fr` ; le chemin proposé
+`/etc/letsencrypt/live/chat.pro-gx.fr/` reste à confirmer sur votre serveur.
+
 ## 1. Ce que fournit la plateforme
 
 Un utilisateur ouvre l’adresse de la plateforme dans son navigateur, se connecte
