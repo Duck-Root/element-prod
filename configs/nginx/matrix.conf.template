@@ -2,7 +2,7 @@
 # Charger dans le contexte http (par exemple /etc/nginx/conf.d/matrix.conf).
 # Hypothèse : Nginx est installé sur cet hôte et joint les ports loopback publiés par Docker.
 # À remplacer partout : __DOMAIN__ et les deux IP d'administration ci-dessous.
-# Monter le certificat et sa clé dans __TLS_CERT__ et __TLS_KEY__.
+# Nginx hôte lit les copies du certificat dans __TLS_CERT__ et __TLS_KEY__.
 
 map $http_upgrade $matrix_connection_upgrade {
     default upgrade;
@@ -13,8 +13,8 @@ server {
     listen 80;
     server_name __DOMAIN__;
 
-    # Ce vhost suppose un certificat déjà émis (par exemple via DNS-01).
-    # Il ne fournit pas de webroot pour le challenge ACME HTTP-01.
+    # Certificat émis et renouvelé par le gestionnaire du serveur.
+    # Ce vhost ne fournit pas de webroot de validation de certificat.
     return 301 https://__DOMAIN__$request_uri;
 }
 

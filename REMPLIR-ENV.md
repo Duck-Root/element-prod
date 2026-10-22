@@ -12,15 +12,15 @@ nano .env
 
 ## Un seul nom public pour les fonctions web
 
-Exemple avec le nom Matrix choisi dans votre fichier de test :
+Exemple générique à adapter à votre domaine réel (ne pas conserver `exemple.fr`) :
 
 ```dotenv
 COMPOSE_PROJECT_NAME=matrix-prod
-MATRIX_DOMAIN=matrix-prod.element-production.duckdns.org
-SYNAPSE_URL=https://matrix-prod.element-production.duckdns.org
-ELEMENT_URL=https://matrix-prod.element-production.duckdns.org
-RTC_URL=https://matrix-prod.element-production.duckdns.org
-TURN_HOST=matrix-prod.element-production.duckdns.org
+MATRIX_DOMAIN=matrix.exemple.fr
+SYNAPSE_URL=https://matrix.exemple.fr
+ELEMENT_URL=https://matrix.exemple.fr
+RTC_URL=https://matrix.exemple.fr
+TURN_HOST=matrix.exemple.fr
 SERVER_IP=88.169.112.139
 BIND_IP=0.0.0.0
 ```
@@ -100,9 +100,12 @@ accessibles directement pour les médias. Le vhost HTTPS ne remplace pas ces flu
 
 ## Certificats et images
 
-Garder `TLS_MODE=provided`. Le script `tls.py install` copie et valide un certificat
-existant ; `tls.py issue` en demande un via DuckDNS DNS-01, sans port 80 entrant.
-Voir DEPLOIEMENT.md. Le token DuckDNS n’est pas à mettre dans `.env`.
+Garder `TLS_MODE=provided`. Le certificat est émis et renouvelé par le gestionnaire
+de certificats du serveur de production. `tls.py install` copie et valide ses
+fichiers dans `data/tls`, puis actualise les services concernés. Aucun compte ACME,
+token DNS ou adresse e-mail de certificat n’est à renseigner dans `.env`.
+Le domaine peut être hébergé chez le fournisseur DNS de votre choix. Voir le hook
+de renouvellement dans DEPLOIEMENT.md.
 
 Les champs `*_IMAGE` sont les versions des logiciels Docker, pas des URL web.
 `KETESA_IMAGE` doit rester une version **construite pour `/admin`**, par exemple

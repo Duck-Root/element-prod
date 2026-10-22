@@ -1,0 +1,21 @@
+#!/bin/sh
+# Exemple à adapter, puis installer parmi les deploy-hooks du gestionnaire externe.
+set -eu
+STACK_DIR=/core/docker/Element_Matrix/matric-poc-prod
+TLS_CERT_DIR=/etc/letsencrypt/live/VOTRE_DOMAINE
+
+case "$TLS_CERT_DIR" in
+  */VOTRE_DOMAINE)
+    echo 'Adapter TLS_CERT_DIR avec le répertoire réel du certificat avant utilisation.' >&2
+    exit 1
+    ;;
+esac
+
+# Certbot appelle les hooks globaux pour plusieurs certificats : ignorer les autres.
+if [ -n "${RENEWED_LINEAGE:-}" ] && [ "$RENEWED_LINEAGE" != "$TLS_CERT_DIR" ]; then
+  exit 0
+fi
+
+exec /usr/bin/python3 "$STACK_DIR/scripts/tls.py" install \
+  --cert "$TLS_CERT_DIR/fullchain.pem" \
+  --key "$TLS_CERT_DIR/privkey.pem"

@@ -32,7 +32,7 @@ Les commandes suivantes s’exécutent en root dans ce dossier, sauf indication 
 Le répertoire est privé car il contiendra les clés et secrets.
 
 Choisir un **seul domaine définitif** pour cette installation neuve. Exemple :
-`matrix-prod.element-production.duckdns.org`. Le DNS doit pointer vers l’IPv4
+`matrix.exemple.fr`. Le DNS doit pointer vers l’IPv4
 publique de production. Le domaine devient le suffixe des comptes ; ne pas le changer
 après création d’une base. Ne pas publier d’AAAA non fonctionnel.
 
@@ -52,11 +52,11 @@ Voir [REMPLIR-ENV.md](REMPLIR-ENV.md). Exemple :
 
 ```dotenv
 COMPOSE_PROJECT_NAME=matrix-prod
-MATRIX_DOMAIN=matrix-prod.element-production.duckdns.org
-SYNAPSE_URL=https://matrix-prod.element-production.duckdns.org
-ELEMENT_URL=https://matrix-prod.element-production.duckdns.org
-RTC_URL=https://matrix-prod.element-production.duckdns.org
-TURN_HOST=matrix-prod.element-production.duckdns.org
+MATRIX_DOMAIN=matrix.exemple.fr
+SYNAPSE_URL=https://matrix.exemple.fr
+ELEMENT_URL=https://matrix.exemple.fr
+RTC_URL=https://matrix.exemple.fr
+TURN_HOST=matrix.exemple.fr
 SERVER_IP=88.169.112.139
 BIND_IP=0.0.0.0
 ADMIN_VPN_IP=
@@ -77,7 +77,7 @@ Ils sont toujours publiés sur `127.0.0.1`, indépendamment de `BIND_IP`.
 | Protocole | Ports | Destination |
 |---|---|---|
 | TCP | 443 | Nginx hôte |
-| TCP | 80, facultatif avec DNS-01 | Nginx hôte, redirection vers HTTPS |
+| TCP | 80, selon la politique du serveur | Redirection HTTPS et besoins éventuels du gestionnaire de certificats |
 | TCP | 7881 | LiveKit, média |
 | UDP | 15000–15100 | LiveKit, média |
 | TCP/UDP | 3478 | TURN |
@@ -93,11 +93,14 @@ Les publications Docker peuvent contourner les règles UFW classiques : vérifie
 filtrage effectif au niveau Docker/réseau, pas seulement les règles UFW affichées.
 Les médias WebRTC ne passent pas par les locations HTTP de Nginx.
 
-## 4. Préparer un certificat : choisir une seule méthode
+## 4. Installer le certificat géré par le serveur
 
-### Méthode A — certificat déjà géré par le Nginx de production
+Le certificat est obtenu et renouvelé **hors de la stack**, par le gestionnaire du
+serveur de production. Utiliser un certificat public valide couvrant exactement
+`MATRIX_DOMAIN` (ou un wildcard qui le couvre), sa chaîne intermédiaire complète et
+sa clé privée. Cette étape ne demande ni token DNS, ni conteneur supplémentaire.
 
-Si votre serveur dispose déjà d’un certificat valide pour le domaine :
+Exemple avec les fichiers d’un gestionnaire utilisant l’arborescence Let's Encrypt :
 
 ```bash
 python3 scripts/tls.py install \
@@ -105,52 +108,28 @@ python3 scripts/tls.py install \
   --key /etc/letsencrypt/live/VOTRE_DOMAINE/privkey.pem
 ```
 
-Remplacer les chemins par les fichiers réels de votre gestionnaire de certificats.
-Le script vérifie le nom, la validité, la chaîne publique et la correspondance clé/
-certificat. Il copie les fichiers sous `data/tls` pour qu’ils soient utilisables par
-TURN et Nginx ; le bundle des racines publiques sert à JWT.
+Remplacer les chemins par ceux de votre environnement. Le script vérifie le domaine,
+la chaîne publique, la validité et la correspondance clé/certificat avant de remplacer
+les copies dans `data/tls`. Le vhost généré lit ces copies, également montées dans
+coturn ; JWT utilise la copie des racines publiques.
 
-Le vhost généré lit ces copies dans `data/tls`, pas directement les fichiers sources.
-Il faut donc rappeler la même commande après chaque renouvellement externe.
-Avec Certbot, créer un deploy-hook contenant cette commande avec des chemins absolus :
+Le certificat doit être installé **avant le rendu et l’activation HTTPS du vhost**.
+La commande peut être exécutée avant le démarrage des conteneurs. Le script ne
+crée pas le certificat et ne modifie pas le DNS. Si le gestionnaire du serveur n’est
+pas encore configuré, le préparer d’abord selon les pratiques de l’organisation.
 
-```bash
-#!/bin/sh
-set -eu
-/usr/bin/python3 /core/docker/Element_Matrix/matric-poc-prod/scripts/tls.py install \
-  --cert /etc/letsencrypt/live/VOTRE_DOMAINE/fullchain.pem \
-  --key /etc/letsencrypt/live/VOTRE_DOMAINE/privkey.pem
-```
+L’ouverture publique du port 80 dépend de ce gestionnaire : une validation HTTP
+l’exige généralement, une validation DNS peut s’en passer. Le vhost fourni ne fait
+que rediriger HTTP vers HTTPS ; il ne configure aucun webroot de validation.
+Ne pas supposer que le retrait du client de certificat de la stack supprime les
+besoins réseau de l’outil externe.
 
-Enregistrer après adaptation dans `/etc/letsencrypt/renewal-hooks/deploy/matrix-stack.sh`,
-réservé à root et exécutable (`chmod 0700`). Le script de cette stack redémarre TURN
-si nécessaire et valide/recharge Nginx s’il est actif. Il ne l’arrête pas.
-Ne pas activer le timer DNS-01 de la méthode B pour un certificat externe.
+## 4.1 Prévoir le hook après renouvellement
 
-### Méthode B — DuckDNS DNS-01, sans ouvrir le port 80
-
-Pour un domaine appartenant à votre compte DuckDNS :
-
-```bash
-python3 scripts/tls.py issue --email votre-adresse@domaine.fr
-```
-
-Le token DuckDNS est demandé en **saisie masquée**, puis enregistré en 0600 dans
-`data/acme/duckdns-token`. Ne pas le transmettre dans un message, une commande ou
-`.env`. Le client ACME ponctuel modifie le TXT DNS, sans changer l’adresse A/AAAA
-et sans publier de port. Les termes Let's Encrypt sont acceptés lors de l’émission.
-Les noms du certificat sont publiés dans Certificate Transparency.
-
-Le conteneur ACME a besoin d’accès DNS et HTTPS sortants. Il utilise un nouvel espace
-`data/acme/dns01/`, distinct des anciennes tentatives HTTP-01. Ne pas lancer deux
-clients DuckDNS sur le même domaine de base en même temps : le TXT est partagé.
-
-Un token d’un autre compte n’aura pas les droits sur le domaine. Le script vous laisse
-renseigner votre token sur le serveur ; il ne récupère pas automatiquement celui du POC.
-Si vous l’avez déjà préparé manuellement, le fichier doit contenir uniquement ce token.
-
-Aucune des deux méthodes ne nécessite d’arrêter Nginx ou de publier un port Docker
-80/443. Le certificat doit exister avant le rendu et avant l’activation HTTPS du vhost.
+Les fichiers installés sont des **copies**, pas des liens vers le certificat source.
+Il faut appeler `tls.py install` après chaque renouvellement réussi. Un exemple
+pour Certbot est détaillé à l’étape 9 ; l’équivalent doit être configuré dans votre
+outil si vous utilisez un autre gestionnaire.
 
 ## 5. Générer et démarrer les services Docker
 
@@ -263,34 +242,56 @@ audio, vidéo et partage d’écran. Faire un test de 10–15 minutes au nombre 
 de participants attendu, et suivre `docker stats $(docker compose ps -q)`.
 Une page HTTPS correcte ne prouve pas que les plages UDP sont accessibles.
 
-## 9. Renouveler les certificats
+## 9. Synchroniser après chaque renouvellement externe
 
-Pour la **méthode A**, conserver le renouvellement de votre gestionnaire externe et
-le deploy-hook d’installation de l’étape 4. Tester la commande du hook manuellement.
-Ne pas programmer une seconde autorité ACME pour le même certificat sans nécessité.
+Conserver **un seul mécanisme d’émission et de renouvellement**, celui du serveur.
+La stack ne fournit plus de timer ni de commande `issue`/`renew`.
 
-Pour la **méthode B DNS-01**, une fois la première émission réussie :
+Avec Certbot, exemple de deploy-hook à adapter :
 
 ```bash
-python3 scripts/tls.py renew
-install -m 0644 configs/systemd/matrix-production-acme.service /etc/systemd/system/
-install -m 0644 configs/systemd/matrix-production-acme.timer /etc/systemd/system/
-systemctl daemon-reload
-systemctl enable --now matrix-production-acme.timer
-systemctl list-timers matrix-production-acme.timer
+#!/bin/sh
+set -eu
+/usr/bin/python3 /core/docker/Element_Matrix/matric-poc-prod/scripts/tls.py install \
+  --cert /etc/letsencrypt/live/VOTRE_DOMAINE/fullchain.pem \
+  --key /etc/letsencrypt/live/VOTRE_DOMAINE/privkey.pem
 ```
 
-Le contrôle est quotidien ; le renouvellement s’effectue dans les 30 derniers jours.
-Il ne publie aucun port, ne stoppe pas Nginx, valide les fichiers, sauvegarde l’ancien
-TLS, redémarre TURN si modifié et recharge Nginx après `nginx -t`. Si les racines
-publiques changent, JWT est recréé pour actualiser son fichier monté.
-Des appels utilisant TURN peuvent être perturbés par son redémarrage.
-Adapter les chemins du service si le projet est déplacé.
+Un modèle prêt à adapter est disponible dans
+[configs/certificates/deploy-hook.sh.example](configs/certificates/deploy-hook.sh.example).
+Il filtre aussi les autres certificats si Certbot utilise un hook global.
+
+Enregistrer le script adapté dans `/etc/letsencrypt/renewal-hooks/deploy/matrix-stack.sh`,
+réservé à root et exécutable (`chmod 0700`). Employer les chemins absolus réels du
+certificat. Avec un autre gestionnaire, configurer le même appel après renouvellement.
+Ne pas installer de hook contenant littéralement `VOTRE_DOMAINE`.
+
+Tester manuellement la commande `tls.py install` avec les chemins réels avant de
+l’ajouter au mécanisme de renouvellement. Si les fichiers sont identiques et déjà
+activés, aucune action sur les services n’est effectuée.
+
+En cas de changement, les anciennes copies sont sauvegardées sous `backups/tls-*`.
+Le script valide Nginx actif, redémarre coturn si le certificat a changé, recrée JWT
+si les racines ont changé, puis recharge Nginx. Il n’arrête pas Nginx ; TURN peut
+interrompre les appels qui utilisent ses relais pendant son redémarrage.
+Les services arrêtés liront les fichiers à leur prochain démarrage.
+
+En cas d’échec d’activation après copie, le script renvoie une erreur et conserve
+`data/tls-install.pending.json`. Corriger le problème puis **relancer la même
+commande**, même si les sources n’ont pas changé, pour terminer l’activation.
+Ne pas supprimer ce marqueur pour masquer une erreur. Surveiller aussi les erreurs
+du hook dans votre gestionnaire de renouvellement.
+
+Vérifier le certificat installé et celui réellement servi au domaine :
 
 ```bash
-journalctl -u matrix-production-acme.service --no-pager -n 80
 openssl x509 -in data/tls/server.crt -noout -dates -issuer
+# Remplacer VOTRE_DOMAINE par votre vrai nom DNS :
+openssl s_client -connect VOTRE_DOMAINE:443 -servername VOTRE_DOMAINE </dev/null 2>/dev/null | openssl x509 -noout -dates -issuer
 ```
+
+Adapter le chemin du hook si le projet est déplacé. Une sauvegarde de la stack ne
+remplace pas celle de la configuration du gestionnaire de certificats externe.
 
 ## 10. Sauvegarde et restauration
 
@@ -299,7 +300,8 @@ bash scripts/backup.sh
 ```
 
 Le script suspend temporairement Synapse/JWT, réalise un dump PostgreSQL cohérent
-avec les médias et archive les paramètres, scripts, clés et compte ACME.
+avec les médias et archive les paramètres, scripts, clés et copies TLS. Un verrou
+empêche une installation TLS concurrente pendant cette sauvegarde.
 Il **n’arrête pas le Nginx hôte**, pour laisser ses autres sites accessibles.
 Les requêtes Matrix peuvent échouer pendant la maintenance.
 Sauvegarder aussi `/etc/nginx`, les fichiers du gestionnaire de certificats externe
@@ -360,7 +362,7 @@ Des backends de test ont aussi confirmé le routage et le retrait des préfixes 
 les ACL en accès refusé/autorisé, la conservation des secrets avec --update et le
 refus de changement de l’identité Matrix.
 L’image Ketesa pour `/admin` a été vérifiée dans le registre.
-L’émission DNS-01, l’installation dans votre Nginx de production et un appel réel
+Le gestionnaire de certificats externe, l’installation dans votre Nginx de production et un appel réel
 restent à valider sur le serveur cible. La préparation n’installe ni paquet ni vhost
 système, et ne démarre pas les services de production.
 
@@ -370,4 +372,3 @@ Références officielles :
 - https://nginx.org/en/docs/http/websocket.html
 - https://nginx.org/en/docs/http/ngx_http_access_module.html
 - https://github.com/etkecc/ketesa#serving-ketesa-under-a-custom-path
-- https://go-acme.github.io/lego/dns/duckdns/

@@ -70,5 +70,5 @@ venv/
 .DS_Store
 Thumbs.db
 
-# Les Compose, scripts, modèles *.example, fragments Caddy,
+# Les Compose, scripts, modèles *.example, modèles Nginx,
 # unités systemd et documents restent versionnés.

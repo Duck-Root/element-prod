@@ -72,9 +72,9 @@ les pistes média entre participants. STUN aide les équipements à découvrir l
 adresse réseau ; TURN fournit un relais quand la communication média directe vers
 le service n’est pas possible. Ces fonctions n’ont pas le rôle d’un serveur web.
 
-Un client ACME **Lego** peut être lancé ponctuellement pour émettre ou renouveler
-le certificat via DuckDNS. Il est défini dans [compose.acme.yaml](compose.acme.yaml),
-ne publie aucun port et ne fait pas partie des sept services applicatifs permanents.
+L’émission et le renouvellement du certificat sont assurés par le gestionnaire de
+certificats du serveur de production. La stack reçoit une copie validée de ses
+fichiers ; elle ne contient aucun client d’émission ni timer de renouvellement.
 
 ## 3. Architecture générale
 
@@ -192,7 +192,7 @@ rester cohérentes entre `.env`, Docker, le pare-feu et les éventuelles règles
 | Protocole | Port ou plage | Destination | Usage |
 |---|---|---|---|
 | TCP | **443** | Nginx hôte | Accès web, API et signalisation des appels |
-| TCP | **80** | Nginx hôte | Redirection HTTP vers HTTPS ; facultatif publiquement avec DNS-01 |
+| TCP | **80** | Nginx hôte | Redirection HTTP vers HTTPS ; ouverture selon le gestionnaire de certificats externe |
 | TCP | **7881** | LiveKit | Transport média TCP |
 | UDP | **15000–15100** | LiveKit | Flux média WebRTC |
 | UDP et TCP | **3478** | coturn | Accès STUN/TURN |
@@ -297,8 +297,8 @@ ne constitue pas une preuve de chiffrement de bout en bout de tous les médias.
 | **Nginx hôte** | Écoute publique 443, certificat HTTPS, routage web, filtrage administratif |
 | **Docker Engine** | Exécution des conteneurs, réseau bridge et publication des ports |
 | **Docker Compose** | Description des services, dépendances, volumes, redémarrage et contrôles de santé |
-| **Scripts du projet** | Génération des configurations, comptes, certificats, sauvegardes et diagnostics |
-| **systemd** | Gestion de Nginx et, si activé, déclenchement du renouvellement DNS-01 |
+| **Scripts du projet** | Génération des configurations, comptes, installation des certificats, sauvegardes et diagnostics |
+| **Système / gestionnaire de certificats externe** | Gestion de Nginx et du renouvellement selon les outils de l’organisation |
 
 Tous les services applicatifs utilisent une politique `restart: unless-stopped`.
 Un processus arrêté anormalement peut donc être relancé par Docker. Cette politique
@@ -339,10 +339,9 @@ partagent donc les ressources disponibles sur le serveur.
 | `data/postgres/` | Fichiers de la base PostgreSQL | Comptes, sessions, salons et événements |
 | `data/synapse/` | Médias et fichiers persistants Synapse, dont la clé de signature | À conserver avec la base |
 | `data/tls/` | Certificat public, clé privée et racines de confiance | HTTPS et TURN TLS |
-| `data/acme/` | État ACME et, en DNS-01, token DuckDNS et certificats | Émission et renouvellement |
 | `configs/generated/` | Configurations et secrets produits par le générateur | Reproduction cohérente de l’installation |
 | `.env` | Paramètres et secrets de l’environnement | À protéger et sauvegarder |
-| `backups/` | Dumps, archives et sauvegardes de configuration | À exporter hors du serveur |
+| `backups/` | Dumps, archives, anciennes copies TLS et sauvegardes de configuration | À exporter hors du serveur |
 | `/etc/nginx/` | Configuration réellement installée dans le Nginx hôte | Sauvegarde système séparée |
 
 Les données sont stockées dans des répertoires de l’hôte, et non uniquement dans la
@@ -376,23 +375,34 @@ Le chiffrement des disques n’est pas mis en place par ce projet.
 
 ### 8.2 Gestion du certificat public
 
-Deux méthodes sont prévues :
+Le certificat est **émis et renouvelé par les outils du serveur de production**,
+indépendamment de Docker et du fournisseur DNS. La stack ne demande aucun token
+DNS et ne gère pas l’émission elle-même.
 
-- **Certificat existant** : `tls.py install` vérifie et copie le certificat géré par
-  l’organisation vers `data/tls`. Le gestionnaire externe doit rappeler cette
-  commande après ses renouvellements, par exemple avec un deploy-hook.
-- **DuckDNS DNS-01** : le client Lego prouve la maîtrise du domaine par un TXT DNS.
-  L’émission et le renouvellement ne nécessitent pas le port 80 entrant. Le token
-  reste sur le serveur, dans un fichier privé, et non dans les commandes ou `.env`.
+Après la première émission puis après chaque renouvellement, un hook appelle :
 
-Lorsqu’il installe de nouveaux fichiers, le script valide la chaîne et la clé,
-sauvegarde l’ancien TLS, redémarre TURN si nécessaire et recharge Nginx actif après
-un `nginx -t`. Si le bundle de confiance change, JWT est recréé pour actualiser son
-fichier monté. Un redémarrage TURN peut perturber les appels qui utilisent ce relais.
+```bash
+python3 scripts/tls.py install --cert /chemin/fullchain.pem --key /chemin/privkey.pem
+```
 
-Le timer `matrix-production-acme.timer` est facultatif et réservé à la méthode
-DuckDNS intégrée. Il doit être installé et activé explicitement. Pour un certificat
-externe, conserver le mécanisme de renouvellement de l’organisation et son hook.
+Le script vérifie la chaîne publique, le domaine, la validité et la correspondance
+clé/certificat, puis installe les copies dans `data/tls`. **Nginx et coturn utilisent
+ces copies** : renouveler les fichiers sources sans lancer le hook laisserait la
+stack avec l’ancien certificat.
+
+Si le contenu change, les anciennes copies sont sauvegardées sous `backups/`.
+Le script vérifie Nginx actif avec `nginx -t`, redémarre TURN si le certificat a changé,
+recrée JWT si les racines de confiance ont changé, puis recharge Nginx sans l’arrêter.
+Un redémarrage TURN peut perturber les appels qui utilisent ce relais.
+Si l’activation échoue, la même commande peut être relancée : une activation en attente
+est mémorisée sous `data/`. Réinstaller des fichiers déjà actifs et identiques ne
+redémarre pas les services.
+
+Le gestionnaire externe conserve la responsabilité du renouvellement, de sa
+planification et des alertes d’échec. Les outils nécessaires, les éventuels secrets
+DNS et l’ouverture requise du port 80 relèvent de sa configuration. Voir la procédure
+pour un exemple de hook Certbot, à adapter à l’outil réellement utilisé. Le
+[modèle de hook](configs/certificates/deploy-hook.sh.example) est fourni dans le projet.
 
 ## 9. Exploitation quotidienne
 
@@ -443,7 +453,8 @@ Prévoir un canal d’alerte indépendant si ce serveur est indisponible.
 
 Le script de sauvegarde suspend temporairement Synapse et JWT pour figer les
 écritures, crée un dump logique PostgreSQL et archive les médias, clés, paramètres
-et états ACME. Il calcule des empreintes et relance les services. Nginx hôte reste
+et copies TLS. Un verrou évite une installation de certificat simultanée à la
+sauvegarde. Le script calcule des empreintes et relance les services. Nginx hôte reste
 actif pour préserver ses autres sites, mais les API Matrix sont temporairement
 indisponibles pendant cette opération.
 
@@ -500,4 +511,3 @@ multi-postes sur l’environnement cible.
 - [Documentation Ketesa](https://github.com/etkecc/ketesa) : administration et déploiement sous `/admin`.
 - [Récupération des clés Element](https://docs.element.io/latest/element-support/device-verification/how-to-ensure-you-have-a-recovery-key/) : continuité de l’identité cryptographique.
 - [Docker et filtrage réseau](https://docs.docker.com/engine/network/packet-filtering-firewalls/) : interaction entre ports publiés et pare-feu.
-- [Lego et DuckDNS](https://go-acme.github.io/lego/dns/duckdns/) : émission et renouvellement DNS-01.

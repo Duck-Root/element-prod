@@ -42,10 +42,9 @@ processus maître Nginx doit pouvoir les lire (installation standard avec maîtr
 Le vhost ne monte aucun fichier dans un conteneur Nginx : il n’y en a pas.
 
 Les ports 80/443 appartiennent à Nginx hôte ; les ports média restent indépendants.
-Le port 80 du modèle ne fait que rediriger vers HTTPS : pour DNS-01 il peut rester
-inaccessible publiquement. Ne pas utiliser un challenge HTTP-01 standalone sur
-80 si Nginx écoute déjà dessus ; utiliser le certificat existant, DNS-01, ou un
-webroot HTTP-01 explicitement configuré par votre gestionnaire de certificats.
+Le certificat est géré par l’outil du serveur, puis copié avec `scripts/tls.py install`.
+Ce vhost redirige HTTP vers HTTPS et n’inclut pas de webroot de validation : si votre
+gestionnaire utilise une validation HTTP, adapter Nginx selon ses besoins.
 
 Références :
 - https://nginx.org/en/docs/http/ngx_http_access_module.html
