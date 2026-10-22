@@ -18,6 +18,27 @@ if os.geteuid() != 0:
     raise SystemExit('Exécuter avec sudo.')
 env = dict(line.split('=', 1) for line in Path('.env').read_text().splitlines()
            if line.strip() and not line.lstrip().startswith('#'))
+# Vérifier le profil avant toute demande auprès de Let's Encrypt.
+for key in ('MATRIX_DOMAIN', 'TURN_HOST', 'SERVER_IP', 'COMPOSE_PROJECT_NAME',
+            'SYNAPSE_URL', 'ELEMENT_URL', 'RTC_URL'):
+    if not env.get(key):
+        raise SystemExit(f'{key} est absent ou vide dans .env.')
+origins = {}
+for key in ('SYNAPSE_URL', 'ELEMENT_URL', 'RTC_URL'):
+    url = urlsplit(env[key])
+    if (url.scheme != 'https' or not url.hostname or url.path not in ('', '/')
+            or url.query or url.fragment or url.username or url.port not in (None, 443)):
+        raise SystemExit(f'{key} doit être une origine HTTPS sans chemin, sur le port 443.')
+    origins[key] = url.hostname
+if origins['SYNAPSE_URL'] != env['MATRIX_DOMAIN']:
+    raise SystemExit('Ce profil neuf attend SYNAPSE_URL=https://' + env['MATRIX_DOMAIN'])
+if len(set(origins.values())) != 3:
+    raise SystemExit('Ce profil neuf exige trois noms distincts pour Matrix, Element et RTC.')
+if any(host == 'exemple.fr' or host.endswith('.exemple.fr')
+       for host in [env['MATRIX_DOMAIN'], env['TURN_HOST'], *origins.values()]):
+    raise SystemExit('Remplacer tous les domaines exemple.fr du modèle dans .env, y compris TURN_HOST.')
+if env['SERVER_IP'] == '192.0.2.10':
+    raise SystemExit('Remplacer SERVER_IP par votre IPv4 publique réelle.')
 hosts = sorted({env['MATRIX_DOMAIN'], env['TURN_HOST']} |
                {urlsplit(env[key]).hostname for key in ('SYNAPSE_URL', 'ELEMENT_URL', 'RTC_URL')})
 if any(not host or not all(c in 'abcdefghijklmnopqrstuvwxyz0123456789.-' for c in host) for host in hosts):
@@ -93,6 +114,8 @@ try:
     if args.mode == 'renew':
         run('docker', 'compose', 'restart', 'coturn')
     print('Certificat public vérifié et installé.')
+except subprocess.CalledProcessError as exc:
+    raise SystemExit(f'Échec de la commande (code {exc.returncode}). Corriger la cause indiquée ci-dessus avant de réessayer.') from None
 finally:
     if stopped:
         run('docker', 'compose', 'start', 'proxy')
