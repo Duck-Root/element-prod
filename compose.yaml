@@ -45,7 +45,9 @@ services:
     <<: *common
     image: ${ELEMENT_IMAGE}
     ports: ["127.0.0.1:${ELEMENT_HTTP_PORT:-18080}:80/tcp"]
-    volumes: [./configs/generated/element/config.json:/app/config.json:ro]
+    volumes:
+      - ./configs/generated/element/config.json:/app/config.json:ro
+      - ./configs/element/default.conf.template:/etc/nginx/templates/default.conf.template:ro
   jwt:
     <<: *common
     image: ${JWT_IMAGE}
@@ -87,7 +89,7 @@ services:
     environment:
       SERVER_HOST: 0.0.0.0
     volumes:
-      - ./configs/generated/ketesa/config.json:/var/public/config.json:ro
+      - ./configs/generated/ketesa/config.json:/var/public/admin/config.json:ro
     ports: ["127.0.0.1:${KETESA_HTTP_PORT:-18082}:8080/tcp"]
     healthcheck:
       test: [CMD, wget, --no-verbose, --tries=1, --spider, 'http://127.0.0.1:8080/health']

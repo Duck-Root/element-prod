@@ -197,6 +197,26 @@ Les images sont épinglées aux versions de travail ; vérifier leur compatibili
 les avis de sécurité avant une ouverture durable. L’image Ketesa est le build
 `v1.5.1-subpath-admin`, prévu pour `/admin`.
 
+### 5.1 Serveur sans IPv6 : Nginx interne d’Element
+
+L’image Element intègre son propre serveur HTTP Nginx pour distribuer les fichiers
+web. Il est distinct du reverse proxy Nginx que vous administrez sur l’hôte.
+Un modèle interne IPv4 est monté depuis `configs/element/default.conf.template`
+pour éviter l’erreur `socket() [::]:80 failed (97: Address family not supported by protocol)`
+sur les serveurs dont IPv6 est désactivé. Aucun changement de votre vhost n’est requis.
+
+Après transfert de cette correction sur le serveur :
+
+```bash
+docker compose up -d --no-deps --force-recreate element
+docker compose logs --tail=50 element
+curl --fail http://127.0.0.1:18080/config.json
+```
+
+Vérifier que le fichier modèle existe avant le démarrage : il doit être transféré
+avec le Compose. Lors d’une mise à jour de l’image Element, comparer ce modèle à
+celui de la nouvelle image pour conserver ses évolutions de configuration.
+
 ## 6. Intégrer la stack à votre Nginx
 
 Le vhost est entièrement géré par l’exploitant. **Aucun modèle n’est généré ou
@@ -402,3 +422,16 @@ Références officielles :
 - https://nginx.org/en/docs/http/websocket.html
 - https://nginx.org/en/docs/http/ngx_http_access_module.html
 - https://github.com/etkecc/ketesa#serving-ketesa-under-a-custom-path
+
+## Dépannage Ketesa : page « Static Web Server »
+
+L’image `v1.5.1-subpath-admin` sert Ketesa sur `/admin/`, pas sur `/`.
+Dans votre location `/admin/`, conserver la whitelist et transmettre le chemin
+sans le supprimer : `proxy_pass http://127.0.0.1:18082;` (sans slash après le port).
+Le montage du Compose doit cibler `/var/public/admin/config.json`.
+Après mise à jour du Compose, recréer uniquement Ketesa :
+
+```bash
+docker compose up -d --no-deps --force-recreate ketesa
+curl --fail http://127.0.0.1:18082/admin/config.json
+```

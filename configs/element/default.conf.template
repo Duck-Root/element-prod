@@ -1,0 +1,30 @@
+# Adaptation du modèle de l’image Element Web v1.12.31 : écoute IPv4 uniquement.
+# Serveur HTTP interne d’Element, distinct du reverse proxy Nginx de l’hôte.
+server {
+    listen       ${ELEMENT_WEB_PORT};
+    server_name  localhost;
+
+    root   /usr/share/nginx/html;
+    index  index.html;
+
+    location = /index.html {
+        add_header Cache-Control "no-cache";
+    }
+    location = /version {
+        add_header Cache-Control "no-cache";
+    }
+    location /i18n/ {
+        add_header Cache-Control "no-cache";
+    }
+    location /usercontent/ {
+        add_header Cache-Control "no-cache";
+    }
+    location /config {
+        root /tmp/element-web-config;
+        add_header Cache-Control "no-cache";
+    }
+    location /modules {
+        alias /modules;
+    }
+    error_page 500 502 503 504 /50x.html;
+}

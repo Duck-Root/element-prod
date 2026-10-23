@@ -11,7 +11,7 @@ Elle fournit des services sur des ports loopback et les données de découverte 
 | `/` | `http://127.0.0.1:18080` | Element, conserver le chemin |
 | `/_matrix/client/`, `/_matrix/media/`, `/_synapse/client/` | `http://127.0.0.1:18008` | Synapse, conserver intégralement le chemin |
 | `/_matrix/federation/v1/openid/userinfo` | `http://127.0.0.1:18008` | Exception OpenID pour les appels ; éviter de journaliser ses jetons |
-| `/admin/` | `http://127.0.0.1:18082` | Whitelist ; retirer `/admin/` avant transmission au build Ketesa pour `/admin` |
+| `/admin/` | `http://127.0.0.1:18082` | Whitelist ; conserver le chemin `/admin/` complet vers le build dédié |
 | `/_synapse/admin/` | `http://127.0.0.1:18008` | Whitelist ; conserver intégralement le chemin |
 | `/livekit/jwt/` | `http://127.0.0.1:18081` | Retirer le préfixe `/livekit/jwt/` |
 | `/livekit/sfu` et `/livekit/sfu/` | `http://127.0.0.1:17880` | Retirer le préfixe ; gérer la connexion WebSocket |
@@ -71,3 +71,12 @@ Références :
 - https://nginx.org/en/docs/http/websocket.html
 - https://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_pass
 - https://github.com/etkecc/ketesa#serving-ketesa-under-a-custom-path
+
+## Chemin Ketesa : conserver /admin/
+
+Avec l’image `v1.5.1-subpath-admin`, les fichiers sont sous `/var/public/admin/`.
+Transmettre `/admin/` tel quel au backend : dans votre bloc location, utiliser
+`proxy_pass http://127.0.0.1:18082;` **sans slash après le port**, en conservant
+votre whitelist. Une URL amont avec slash retire le préfixe et sert la page
+« Static Web Server » au lieu de Ketesa.
+Le fichier applicatif est monté dans `/var/public/admin/config.json`.

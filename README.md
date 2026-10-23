@@ -172,7 +172,8 @@ sont refusées par le vhost.
 
 Le préfixe public `/livekit/jwt/` est retiré avant transmission au service JWT ;
 `/livekit/jwt/healthz` devient donc `/healthz` sur ce service. Le même principe
-s’applique au préfixe LiveKit et à l’interface Ketesa construite pour `/admin`.
+s’applique au préfixe LiveKit. Pour Ketesa, le chemin `/admin/` est au contraire
+conservé : l’image dédiée publie ses fichiers dans ce sous-répertoire.
 Les chemins des API Synapse sont, eux, conservés.
 
 ### 4.2 Trois espaces d’adressage à distinguer
@@ -352,6 +353,13 @@ dans un ordre incohérent : Synapse attend notamment que PostgreSQL soit disponi
 Nginx est géré séparément par le système et doit être activé après préparation de
 son certificat et de son vhost. Les points de contrôle ne remplacent pas une recette
 utilisateur complète, notamment pour les appels.
+
+Element Web distribue ses fichiers via un Nginx interne à son image Docker.
+Le Compose lui fournit un modèle d’écoute IPv4 uniquement pour fonctionner sur
+un hôte sans IPv6. Ce serveur interne n’est pas le reverse proxy de production :
+votre vhost et ses whitelists restent entièrement gérés en dehors de la stack.
+Le modèle est dans `configs/element/default.conf.template` ; le revoir lors des
+mises à jour de l’image Element.
 
 ### 7.2 Configuration et génération
 
