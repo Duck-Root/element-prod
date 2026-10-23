@@ -19,7 +19,7 @@ sont détaillés dans les documents suivants.
 |---|---|
 | [Procédure de déploiement](DEPLOIEMENT.md) | Installer, configurer, démarrer, tester et sauvegarder la plateforme |
 | [Guide du fichier .env](REMPLIR-ENV.md) | Comprendre le domaine, les adresses IP, les ports, les versions et les secrets |
-| [Configuration Nginx](configs/nginx/README.md) | Comprendre le routage web et installer le vhost généré |
+| [Configuration Nginx](configs/nginx/README.md) | Routes et ports à intégrer au vhost géré par l’exploitant |
 | [Compose applicatif](compose.yaml) | Définition des sept services Docker, de leurs dépendances et de leurs volumes |
 
 ## Accès prévu en production
@@ -33,8 +33,8 @@ Le domaine est prérempli avec **`chat.pro-gx.fr`** dans `.env` et `.env.example
 | Identifiant d’un utilisateur | `@alice:chat.pro-gx.fr` |
 
 Ce préremplissage ne crée pas le DNS et n’active pas le vhost. Faire pointer le domaine
-vers l’IP publique de production, vérifier `SERVER_IP` et renseigner les IP publiques
-de sortie VPN/bureaux. Le certificat doit couvrir `chat.pro-gx.fr` ; le chemin proposé
+vers l’IP publique de production et vérifier `SERVER_IP`. La whitelist est gérée
+directement dans votre Nginx. Le certificat doit couvrir `chat.pro-gx.fr` ; le chemin proposé
 `/etc/letsencrypt/live/chat.pro-gx.fr/` reste à confirmer sur votre serveur.
 
 ## 1. Ce que fournit la plateforme
@@ -45,8 +45,8 @@ avec son compte puis rejoint des **salons** : espaces de discussion consacrés �
 photos ou documents et participer à un appel.
 
 L’administrateur dispose d’une console de gestion des comptes et des salons. Cette
-console est accessible uniquement depuis les IP publiques autorisées des bureaux
-ou du VPN professionnel, puis après authentification avec un compte administrateur.
+console doit être protégée par la whitelist que l’exploitant configure dans Nginx,
+puis par l’authentification avec un compte administrateur.
 
 Ce profil vise une équipe de moins de dix utilisateurs. LiveKit est configuré pour
 un maximum de dix participants par salle d’appel ; cette limite de configuration
@@ -228,19 +228,18 @@ par les paquets, et pas uniquement dans l’affichage d’UFW.
 
 ### 4.4 Filtrage de l’administration
 
-Deux paramètres définissent les sources autorisées : `ADMIN_VPN_IP` et
-`ADMIN_OFFICE_IP`. Ils correspondent aux **IP publiques de sortie** du poste
-administrateur lorsqu’il utilise le VPN professionnel ou le réseau des bureaux.
+Les listes d’IP autorisées sont administrées **directement dans votre Nginx**.
+La stack ne contient aucun paramètre de whitelist et ne génère ni n’installe de
+vhost. Protéger les deux routes `/admin/` et `/_synapse/admin/` avec la liste des
+IP publiques de sortie des bureaux et du VPN professionnel.
 
-Nginx applique la liste aux routes `/admin/` et `/_synapse/admin/`. Une source hors
-liste reçoit une réponse **403** ; une source autorisée doit encore fournir des
-identifiants et droits administrateur valides. Si les deux paramètres sont vides,
-aucune source n’est autorisée pour ces routes.
+La restriction IP et les identifiants administrateur sont complémentaires. Le
+filtrage IP n’est pas automatiquement appliqué par Docker ou Synapse ; il dépend
+de votre configuration Nginx. Vérifier une réponse 403 depuis une IP non autorisée.
 
-Ce contrôle suppose que Nginx reçoit directement l’adresse du client. Si un autre
-proxy ou un CDN est placé devant, la gestion de l’IP réelle doit être adaptée avec
-une liste stricte de proxies de confiance. Un VPN en split tunneling ne convient
-que si le trafic destiné à la plateforme emprunte bien sa sortie professionnelle.
+Si un autre proxy se trouve devant Nginx, configurer l’IP réelle avec une liste
+stricte de proxies de confiance. En split tunneling, vérifier que le trafic vers
+la plateforme emprunte la sortie publique du VPN professionnel.
 
 ### 4.5 Coexistence avec les autres applications du serveur
 
@@ -363,8 +362,9 @@ et `RTC_URL` ont la même origine HTTPS. Le générateur ajoute les chemins néc
 `scripts/render.py` crée les fichiers privés sous `configs/generated/`, génère les
 secrets initialement vides et prépare les droits du volume Synapse, utilisé par
 l’UID 991. Les configurations applicatives sont montées en lecture seule dans les
-conteneurs. Le vhost généré contient des destinations loopback et les chemins
-absolus des fichiers TLS sur l’hôte.
+conteneurs. Les JSON de découverte sont fournis sous `configs/generated/nginx/`
+pour intégration à votre proxy. Aucun fichier de vhost n’est généré et aucun
+script ne modifie ou recharge Nginx.
 
 Une modification contrôlée s’effectue avec `render.py --update`. Ce mode sauvegarde
 les paramètres et fichiers générés, conserve les secrets existants et refuse de
@@ -429,13 +429,14 @@ python3 scripts/tls.py install --cert /chemin/fullchain.pem --key /chemin/privke
 ```
 
 Le script vérifie la chaîne publique, le domaine, la validité et la correspondance
-clé/certificat, puis installe les copies dans `data/tls`. **Nginx et coturn utilisent
-ces copies** : renouveler les fichiers sources sans lancer le hook laisserait la
-stack avec l’ancien certificat.
+clé/certificat, puis installe les copies dans `data/tls` pour coturn et les racines
+de confiance de JWT. Nginx conserve les chemins de certificat et son cycle de
+rechargement propres. Renouveler les sources sans lancer le hook laisserait TURN
+avec l’ancien certificat.
 
 Si le contenu change, les anciennes copies sont sauvegardées sous `backups/`.
-Le script vérifie Nginx actif avec `nginx -t`, redémarre TURN si le certificat a changé,
-recrée JWT si les racines de confiance ont changé, puis recharge Nginx sans l’arrêter.
+Le script redémarre TURN si le certificat a changé et recrée JWT si les racines
+de confiance ont changé. Il ne teste, ne recharge et ne modifie pas Nginx.
 Un redémarrage TURN peut perturber les appels qui utilisent ce relais.
 Si l’activation échoue, la même commande peut être relancée : une activation en attente
 est mémorisée sous `data/`. Réinstaller des fichiers déjà actifs et identiques ne
@@ -487,10 +488,10 @@ Prévoir un canal d’alerte indépendant si ce serveur est indisponible.
 |---|---|
 | Site inaccessible | DNS, IP publique, filtrage/NAT 443, Nginx et certificat |
 | Réponse 502 | Service Docker arrêté, mauvais port local ou indisponibilité pendant maintenance |
-| `/admin/` renvoie 403 | IP publique de sortie, VPN, valeurs ADMIN et vhost installé |
+| `/admin/` renvoie 403 | IP publique de sortie, VPN et whitelist de votre vhost Nginx |
 | Connexion réussie mais nouvel appareil non vérifié | Ancienne session ou clé de récupération utilisateur |
 | Appel établi sans son/vidéo | IP annoncée, ports média, filtrage UDP/TURN et réseau du participant |
-| Certificat renouvelé mais ancien TLS encore servi | Installation des copies, résultat de `nginx -t`, rechargement Nginx et état TURN |
+| Certificat renouvelé mais ancien TLS encore servi | Certificat et rechargement du proxy externe ; copies TLS de TURN et résultat du hook |
 
 ## 10. Sauvegarde, restauration et disponibilité
 
@@ -538,13 +539,10 @@ principalement de la quantité de fichiers conservés et de la politique de rét
 Les versions d’images sont épinglées dans `.env.example` pour la reproductibilité ;
 leurs mises à jour et avis de sécurité doivent être suivis par l’exploitant.
 
-La préparation du profil a validé en environnement isolé le rendu, le Compose,
-les ports loopback et le vhost. Des backends de test ont vérifié les routes,
-le retrait des préfixes RTC et le filtrage administratif autorisé/refusé.
-La conservation des secrets et le refus de changement d’identité ont été contrôlés.
-Ces tests ne constituent pas une recette de production : il reste à valider le
-certificat réel, le Nginx installé, les flux publics, la restauration et les appels
-multi-postes sur l’environnement cible.
+Les configurations applicatives, les ports loopback, les secrets et la protection
+de l’identité peuvent être validés indépendamment du proxy. La stack ne valide pas
+votre vhost externe : sa syntaxe, ses whitelists, les routes et la recette publique
+restent à vérifier avec votre configuration Nginx de production.
 
 ## 12. Références
 

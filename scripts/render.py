@@ -24,12 +24,9 @@ for k in ('SYNAPSE_URL', 'ELEMENT_URL', 'RTC_URL'):
     u = urlsplit(e[k])
     if u.scheme != 'https' or not u.hostname or u.path not in ('', '/') or u.query or u.fragment or u.username:
         raise SystemExit(f'{k}: origine HTTPS requise, sans chemin')
-    if u.port not in (None, int(e['HTTPS_PORT'])):
-        raise SystemExit(f'{k}: port différent de HTTPS_PORT')
+    if u.port not in (None, 443):
+        raise SystemExit(f'{k}: HTTPS public attendu sur le port 443')
     hosts.append(u.hostname)
-# OpenID et autodécouverte du server_name utilisent 443.
-if int(e['HTTPS_PORT']) != 443:
-    raise SystemExit('Ce profil exige HTTPS_PORT=443 pour OpenID et découverte Matrix. Voir README pour HAProxy.')
 if any(urlsplit(e[k]).hostname != e['MATRIX_DOMAIN'] for k in ('SYNAPSE_URL','ELEMENT_URL','RTC_URL')) or e['TURN_HOST'] != e['MATRIX_DOMAIN']:
     raise SystemExit('Profil domaine unique : SYNAPSE_URL, ELEMENT_URL et RTC_URL=https://MATRIX_DOMAIN ; TURN_HOST=MATRIX_DOMAIN')
 if e['MATRIX_DOMAIN'] == 'exemple.fr' or e['MATRIX_DOMAIN'].endswith('.exemple.fr'):
@@ -39,11 +36,11 @@ if not all(re.fullmatch(r'[a-z0-9.-]+', h) for h in hosts):
 ipaddress.IPv4Address(e['SERVER_IP']); ipaddress.IPv4Address(e['BIND_IP'])
 if e['SERVER_IP'] == '192.0.2.10':
     raise SystemExit('Renseigner SERVER_IP dans .env avant de continuer')
-for k in ('HTTP_PORT HTTPS_PORT LIVEKIT_TCP_PORT LIVEKIT_UDP_START LIVEKIT_UDP_END TURN_PORT TURN_TLS_PORT TURN_UDP_START TURN_UDP_END').split():
+for k in ('LIVEKIT_TCP_PORT LIVEKIT_UDP_START LIVEKIT_UDP_END TURN_PORT TURN_TLS_PORT TURN_UDP_START TURN_UDP_END').split():
     if not 1 <= int(e[k]) <= 65535: raise SystemExit(f'Port invalide : {k}')
 a,b,c,d = [int(e[k]) for k in ('LIVEKIT_UDP_START','LIVEKIT_UDP_END','TURN_UDP_START','TURN_UDP_END')]
 if a>b or c>d or max(a,c)<=min(b,d): raise SystemExit('Plages UDP invalides ou chevauchantes')
-# Valider les ports locaux, les IP d'administration et l'identité avant toute écriture.
+# Valider les ports locaux et l'identité avant toute écriture.
 local_ports = {'SYNAPSE_HTTP_PORT':'18008','ELEMENT_HTTP_PORT':'18080','JWT_HTTP_PORT':'18081','LIVEKIT_HTTP_PORT':'17880','KETESA_HTTP_PORT':'18082'}
 for key, default in local_ports.items():
     e.setdefault(key, default)
@@ -51,7 +48,7 @@ for key, default in local_ports.items():
         raise SystemExit(f'{key}: port local invalide')
 if len({int(e[key]) for key in local_ports}) != len(local_ports):
     raise SystemExit('Les cinq ports HTTP locaux doivent être distincts')
-public_tcp = {int(e[key]) for key in ('HTTP_PORT','HTTPS_PORT','LIVEKIT_TCP_PORT','TURN_PORT','TURN_TLS_PORT')}
+public_tcp = {int(e[key]) for key in ('LIVEKIT_TCP_PORT','TURN_PORT','TURN_TLS_PORT')}
 if public_tcp & {int(e[key]) for key in local_ports}:
     raise SystemExit('Un port HTTP local chevauche un port TCP public')
 # Ports TCP publiés par les autres applications du serveur : ne pas les réutiliser.
@@ -67,14 +64,6 @@ published_tcp = {int(e[key]) for key in local_ports} | {int(e[key]) for key in (
 conflicts = reserved_tcp & published_tcp
 if conflicts:
     raise SystemExit('Ports TCP déjà réservés sur le serveur : '+', '.join(map(str,sorted(conflicts)))+'. Choisir d’autres ports Matrix.')
-# HTTP_PORT/HTTPS_PORT sont portés par le Nginx hôte partagé : pas par Docker.
-admin_rules = []
-for key in ('ADMIN_VPN_IP','ADMIN_OFFICE_IP'):
-    if e.get(key):
-        net = ipaddress.ip_network(e[key], strict=False)
-        if net.prefixlen == 0:
-            raise SystemExit('Ne pas autoriser tout Internet dans '+key)
-        admin_rules.append('allow '+str(net)+';')
 old_config = P('configs/generated/synapse/homeserver.yaml')
 if old_config.exists() and json.loads(old_config.read_text())['server_name'] != e['MATRIX_DOMAIN']:
     raise SystemExit('Refus de modifier server_name sur une installation initialisée')
@@ -92,12 +81,6 @@ for k in ('POSTGRES_PASSWORD REGISTRATION_SHARED_SECRET MACAROON_SECRET FORM_SEC
     if not re.fullmatch('[a-fA-F0-9]{32,128}', e[k]):
         raise SystemExit(f'{k}: utiliser 32 à 128 caractères hexadécimaux')
 p.write_text(s); p.chmod(0o600)
-for key, urlkey in [('SYNAPSE_HOST','SYNAPSE_URL'),('RTC_HOST','RTC_URL')]:
-    value = urlsplit(e[urlkey]).hostname
-    if re.search(r'^'+key+r'=', s, re.M):
-        s = re.sub(r'^'+key+r'=.*$', key+'='+value, s, flags=re.M)
-    else: s += '\n'+key+'='+value+'\n'
-p.write_text(s)
 root = P('configs/generated'); root.mkdir(parents=True, exist_ok=True)
 fingerprint = hashlib.sha256(p.read_bytes()).hexdigest()
 marker = root/'environment.sha256'
@@ -139,6 +122,7 @@ for f in ('ca.crt','server.crt','server.key'):
 (tls/'server.crt').chmod(0o644); (tls/'ca.crt').chmod(0o644)
 well = {'m.homeserver':{'base_url':e['SYNAPSE_URL']}, 'org.matrix.msc4143.rtc_foci':[{'type':'livekit','livekit_service_url':e['RTC_URL']+'/livekit/jwt'}]}
 write('nginx/client.json',well)
+write('nginx/server.json',{'m.server':e['MATRIX_DOMAIN']+':443'})
 write('synapse/rtc-registration.yaml',{'id':'matrixrtc','as_token':e['AS_TOKEN'],'hs_token':e['HS_TOKEN'],'sender_localpart':'_lk_jwt_service','url':None,'namespaces':{'users':[{'exclusive':False,'regex':'.*'}]},'io.element.msc4502.scopes':['urn:matrix:client:io.element.msc4502:rooms:is_joined'],'io.element.msc4512.proxy_prefix':'rtc/livekit','io.element.msc4512.proxy_url':'http://jwt:8080'})
 write('synapse/homeserver.yaml', {
  'server_name':e['MATRIX_DOMAIN'],'public_baseurl':e['SYNAPSE_URL']+'/', 'pid_file':'/data/homeserver.pid',
@@ -181,15 +165,6 @@ log-file=stdout
 simple-log
 ''')
 write('ketesa/config.json', {'restrictBaseUrl':e['SYNAPSE_URL'], 'wellKnownDiscovery':False, 'asManagedUsers':['^@_lk_jwt_service:']})
-template = P('configs/nginx/matrix.conf.template').read_text()
-replacements = {'DOMAIN':e['MATRIX_DOMAIN'], 'TLS_CERT':str((P.cwd()/'data/tls/server.crt').resolve()), 'TLS_KEY':str((P.cwd()/'data/tls/server.key').resolve()), 'ADMIN_ALLOW_RULES':'\n        '.join(admin_rules) or '# Aucune IP autorisée : administration bloquée.'}
-replacements.update({key:e[key] for key in local_ports})
-for key, value in replacements.items():
-    template = template.replace('__'+key+'__',value)
-if re.search(r'__[A-Z_]+__',template):
-    raise SystemExit('Variable Nginx non remplacée')
-write('nginx/matrix.conf', template)
 marker.write_text(fingerprint+'\n')
-print('Configurations générées ; secrets conservés. Aucun proxy Docker. Vhost : configs/generated/nginx/matrix.conf')
-if not admin_rules:
-    print('Administration bloquée par défaut : remplir ADMIN_VPN_IP / ADMIN_OFFICE_IP puis render.py --update.')
+print('Configurations applicatives générées ; secrets conservés. Découverte : configs/generated/nginx/client.json et server.json.')
+print('Le reverse proxy externe et ses listes d’accès restent gérés par l’exploitant.')

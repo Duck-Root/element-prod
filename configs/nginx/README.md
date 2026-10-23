@@ -1,55 +1,70 @@
-# Nginx installé directement sur le serveur
+# Contrat d’intégration au reverse proxy de production
 
-Source : `matrix.conf.template`. Généré : `../generated/nginx/matrix.conf`
-(depuis la racine du projet : `configs/generated/nginx/matrix.conf`).
+Le vhost et les whitelists sont gérés par l’exploitant. La stack ne génère aucun
+fichier de configuration Nginx, n’installe aucun site et n’exécute ni `nginx` ni `systemctl`.
+Elle fournit des services sur des ports loopback et les données de découverte Matrix.
 
-Le générateur remplace domaine, chemins des certificats, IP autorisées et ports
-loopback à partir de `.env`. Ne pas installer le modèle avec ses marqueurs `__...__`.
+## Routes à configurer dans votre vhost
 
-| Route publique | Backend local par défaut |
+| Route publique sur `https://chat.pro-gx.fr` | Destination locale par défaut | Traitement |
+|---|---|---|
+| `/` | `http://127.0.0.1:18080` | Element, conserver le chemin |
+| `/_matrix/client/`, `/_matrix/media/`, `/_synapse/client/` | `http://127.0.0.1:18008` | Synapse, conserver intégralement le chemin |
+| `/_matrix/federation/v1/openid/userinfo` | `http://127.0.0.1:18008` | Exception OpenID pour les appels ; éviter de journaliser ses jetons |
+| `/admin/` | `http://127.0.0.1:18082` | Whitelist ; retirer `/admin/` avant transmission au build Ketesa pour `/admin` |
+| `/_synapse/admin/` | `http://127.0.0.1:18008` | Whitelist ; conserver intégralement le chemin |
+| `/livekit/jwt/` | `http://127.0.0.1:18081` | Retirer le préfixe `/livekit/jwt/` |
+| `/livekit/sfu` et `/livekit/sfu/` | `http://127.0.0.1:17880` | Retirer le préfixe ; gérer la connexion WebSocket |
+
+Protéger **les deux** chemins d’administration. Autoriser l’accès depuis les IP
+publiques fixes du VPN et des bureaux dans votre configuration Nginx, puis refuser
+les autres sources. Aucun filtre IP n’est appliqué par les scripts applicatifs.
+La connexion exige toujours un compte administrateur Matrix.
+Refuser les autres routes `/_matrix/` et `/_synapse/`, notamment la fédération générale.
+
+Ces ports HTTP sont publiés uniquement sur 127.0.0.1 : Nginx doit tourner sur le même
+hôte. Les ports TCP 3306, 5100, 8090 et 8443 déjà utilisés ne sont pas réutilisés.
+Si vous changez les ports dans `.env`, reporter les valeurs dans votre vhost.
+
+## Découverte à publier
+
+Le rendu crée deux fichiers JSON :
+
+| URL publique à servir | Fichier contenant la réponse |
 |---|---|
-| `/` | Element `127.0.0.1:18080` |
-| `/_matrix/client/`, `/_matrix/media/`, `/_synapse/client/` | Synapse `127.0.0.1:18008` |
-| `/_matrix/federation/v1/openid/userinfo` | Synapse, exception nécessaire aux appels |
-| `/_synapse/admin/` | Synapse, IP VPN/bureaux uniquement |
-| `/admin/` | Ketesa `127.0.0.1:18082`, IP VPN/bureaux uniquement |
-| `/livekit/jwt/` | JWT `127.0.0.1:18081`, préfixe retiré |
-| `/livekit/sfu` et `/livekit/sfu/` | LiveKit `127.0.0.1:17880`, préfixe retiré, WebSocket |
-| `/.well-known/matrix/client` et `/server` | JSON de découverte généré |
+| `/.well-known/matrix/client` | `configs/generated/nginx/client.json` |
+| `/.well-known/matrix/server` | `configs/generated/nginx/server.json` |
 
-Les autres routes `/_matrix/` et `/_synapse/` sont refusées. Le journal d’accès
-OpenID est désactivé pour ne pas journaliser ses jetons. Les IP d’administration
-vides bloquent tous les accès privés. Le contrôle suppose que Nginx reçoit directement
-les connexions Internet : si un autre proxy/CDN est devant, configurer l’IP réelle
-avec une liste stricte de proxies de confiance avant d’utiliser ces ACL.
+Servir les réponses en `application/json`. Pour la découverte client, prévoir
+`Access-Control-Allow-Origin: *`. Les fichiers JSON ne contiennent pas de secrets,
+mais leur répertoire parent est privé : reprendre leur contenu dans votre vhost ou
+les copier vers un emplacement public lisible par Nginx, sans exposer le reste des
+configurations générées. Actualiser ces réponses si les adresses applicatives changent.
 
-Installation sur Debian, une fois les certificats installés et la stack démarrée :
+Pour ce domaine, la réponse serveur est `{"m.server":"chat.pro-gx.fr:443"}` et la
+réponse client annonce le homeserver `https://chat.pro-gx.fr` ainsi que le service
+RTC `https://chat.pro-gx.fr/livekit/jwt`.
 
-```bash
-install -m 0600 configs/generated/nginx/matrix.conf /etc/nginx/sites-available/matrix-prod.conf
-ln -s /etc/nginx/sites-available/matrix-prod.conf /etc/nginx/sites-enabled/matrix-prod.conf
-nginx -t
-systemctl reload nginx
-```
+## Points d’attention pour le proxy
 
-Si le lien existe déjà, le conserver et mettre à jour le fichier source. Retirer
-un éventuel ancien vhost du même domaine, après sauvegarde. Ne pas désactiver les
-autres sites du serveur. Ce fichier doit être chargé dans le contexte `http` de
-Nginx ; l’installation Debian standard inclut `sites-enabled` dans ce contexte.
+Transmettre Host, l’IP réelle du client et `X-Forwarded-Proto: https` à Synapse.
+Ne faire confiance qu’aux proxies connus si un autre proxy/CDN est placé devant.
+Activer la transmission des en-têtes WebSocket Upgrade/Connection pour LiveKit.
+La taille d’envoi configurée côté Synapse est de 100 Mo : adapter la limite Nginx.
+Les flux audio/vidéo utilisent les ports LiveKit/TURN décrits dans la procédure,
+indépendamment du routage HTTP.
 
-Les ports TCP 3306, 5100, 8090 et 8443 sont déjà publiés par d’autres applications.
-Aucun backend du vhost Matrix ne les utilise. Conserver les ports loopback proposés,
-et ajouter le vhost au Nginx existant sans changer les autres sites. Les ports HTTP
-internes 80/8080 des conteneurs ne sont pas des réservations sur l’hôte.
+## Certificat et exploitation
 
-Le vhost lit les certificats dans le chemin absolu `data/tls` de ce projet. Le
-processus maître Nginx doit pouvoir les lire (installation standard avec maître root).
-Le vhost ne monte aucun fichier dans un conteneur Nginx : il n’y en a pas.
+Nginx utilise les fichiers et le renouvellement gérés de votre côté. Le hook
+`scripts/tls.py install` ne fait que copier le certificat pour coturn, maintenir
+les racines de JWT et actualiser ces conteneurs lorsqu’ils tournent.
+Il ne vérifie ni ne recharge Nginx. Le mécanisme de renouvellement du serveur doit
+assurer séparément le rechargement nécessaire de votre proxy.
 
-Les ports 80/443 appartiennent à Nginx hôte ; les ports média restent indépendants.
-Le certificat est géré par l’outil du serveur, puis copié avec `scripts/tls.py install`.
-Ce vhost redirige HTTP vers HTTPS et n’inclut pas de webroot de validation : si votre
-gestionnaire utilise une validation HTTP, adapter Nginx selon ses besoins.
+La sauvegarde du projet ne remplace pas celle de votre configuration Nginx.
+Après modification du proxy, réaliser vos contrôles habituels de syntaxe, rechargement,
+whitelist depuis une IP autorisée/non autorisée et tests publics de messagerie/appels.
 
 Références :
 - https://nginx.org/en/docs/http/ngx_http_access_module.html

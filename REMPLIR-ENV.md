@@ -49,21 +49,12 @@ NAT ciblent son IP LAN, pas `0.0.0.0` ni l’IP publique.
 **Ne pas changer `MATRIX_DOMAIN` après initialisation d’une base.** Le générateur
 refuse ce changement même avec `--update`.
 
-## Qui peut accéder à l’administration ?
+## Administration et vhost gérés hors de la stack
 
-```dotenv
-ADMIN_VPN_IP=VOTRE_IP_PUBLIQUE_DE_SORTIE_VPN
-ADMIN_OFFICE_IP=VOTRE_IP_PUBLIQUE_DES_BUREAUX
-```
-
-Remplacer les deux textes par de vraies IP, ou laisser une ligne vide si ce réseau
-n’est pas utilisé. Accepte une IPv4/IPv6 ou un CIDR précis. Ne pas mettre d’URL,
-de port ou l’IP du serveur. Les deux champs vides génèrent un `deny all`.
-Un `/0` est refusé pour éviter une autorisation de tout Internet.
-
-Ces IP autorisent l’accès à `/admin/` et `/_synapse/admin/` ; un compte administrateur
-Matrix reste nécessaire. Avec un VPN en split tunneling, vérifier que la destination
-Matrix utilise effectivement sa sortie professionnelle.
+Configurer vos whitelists directement dans Nginx, pour `/admin/` et
+`/_synapse/admin/`. Aucun paramètre d’IP d’administration n’est lu par la stack.
+Les scripts ne génèrent ni n’installent de vhost et ne rechargent pas Nginx.
+Un compte administrateur Matrix reste nécessaire après le filtrage IP.
 
 ## Ports locaux pour Nginx : ne pas les ouvrir sur Internet
 
@@ -80,8 +71,8 @@ Nginx installé sur la même machine les utilise directement ; il n’a pas beso
 résoudre des noms Docker. Garder ces valeurs si elles sont libres.
 Les cinq ports doivent être distincts et ne pas chevaucher les ports TCP publics.
 
-`HTTP_PORT=80` et `HTTPS_PORT=443` décrivent le point d’entrée Nginx hôte ; Docker
-ne publie aucun de ces ports. Le profil exige HTTPS sur 443 pour la découverte.
+Les ports 80/443 sont configurés dans votre Nginx, pas dans `.env` ni dans Docker.
+Le profil applicatif attend HTTPS sur 443 pour la découverte.
 
 ## Ports déjà utilisés par les autres applications
 
@@ -139,14 +130,12 @@ régénérer sur une base utilisée. Ne pas partager le `.env` complet dans un m
 
 ## Modifier après le premier rendu
 
-Pour modifier les IP autorisées ou les ports locaux, sauvegarder, éditer `.env`, puis :
+Pour modifier les ports locaux, sauvegarder, éditer `.env`, puis :
 
 ```bash
 python3 scripts/render.py --update
 docker compose config --quiet
 docker compose up -d --wait --wait-timeout 240
-install -m 0600 configs/generated/nginx/matrix.conf /etc/nginx/sites-available/matrix-prod.conf
-nginx -t && systemctl reload nginx
 ```
 
 `--update` sauvegarde les fichiers générés et le `.env` avant le rendu puis remplace
@@ -154,3 +143,6 @@ les configurations à partir des paramètres. Les personnalisations manuelles de
 fichiers générés peuvent être écrasées : les reporter au préalable dans le modèle
 ou le générateur. Les secrets existants sont conservés. Adapter les scripts de
 renouvellement externes si le chemin du projet ou le certificat source change.
+
+Après un changement de port local, adapter séparément les destinations de votre
+vhost Nginx. La régénération applicative ne touche pas votre whitelist.

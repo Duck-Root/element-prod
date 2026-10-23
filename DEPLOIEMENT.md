@@ -59,14 +59,11 @@ RTC_URL=https://chat.pro-gx.fr
 TURN_HOST=chat.pro-gx.fr
 SERVER_IP=88.169.112.139
 BIND_IP=0.0.0.0
-ADMIN_VPN_IP=
-ADMIN_OFFICE_IP=
 ```
 
-Remplacer domaine et IP selon votre production. Renseigner les IP publiques de
-SORTIE du VPN et des bureaux dans les deux dernières lignes. Vides, elles bloquent
-l’administration pour tout le monde ; le reste d’Element reste public. Les secrets
-applicatifs restent vides jusqu’au premier rendu.
+Remplacer domaine et IP selon votre production. Les whitelists sont gérées
+directement dans votre Nginx et ne sont pas des paramètres de la stack.
+Les secrets applicatifs restent vides jusqu’au premier rendu.
 
 Les ports locaux par défaut sont 18008 (Synapse), 18080 (Element), 18081 (JWT),
 17880 (LiveKit HTTP) et 18082 (Ketesa). Vérifier qu’ils sont libres avec `ss -lnt`.
@@ -146,8 +143,8 @@ python3 scripts/tls.py install \
 
 Remplacer les chemins par ceux de votre environnement. Le script vérifie le domaine,
 la chaîne publique, la validité et la correspondance clé/certificat avant de remplacer
-les copies dans `data/tls`. Le vhost généré lit ces copies, également montées dans
-coturn ; JWT utilise la copie des racines publiques.
+les copies dans `data/tls` montées dans coturn ; JWT utilise la copie des racines
+publiques. Votre Nginx conserve ses propres chemins de certificat.
 
 Le certificat doit être installé **avant le rendu et l’activation HTTPS du vhost**.
 La commande peut être exécutée avant le démarrage des conteneurs. Le script ne
@@ -155,8 +152,8 @@ crée pas le certificat et ne modifie pas le DNS. Si le gestionnaire du serveur 
 pas encore configuré, le préparer d’abord selon les pratiques de l’organisation.
 
 L’ouverture publique du port 80 dépend de ce gestionnaire : une validation HTTP
-l’exige généralement, une validation DNS peut s’en passer. Le vhost fourni ne fait
-que rediriger HTTP vers HTTPS ; il ne configure aucun webroot de validation.
+l’exige généralement, une validation DNS peut s’en passer. Votre vhost doit être adapté
+aux besoins de validation du gestionnaire de certificats que vous utilisez.
 Ne pas supposer que le retrait du client de certificat de la stack supprime les
 besoins réseau de l’outil externe.
 
@@ -173,21 +170,21 @@ outil si vous utilisez un autre gestionnaire.
 python3 scripts/render.py
 docker compose config --quiet
 docker compose pull
-docker compose up -d --wait --wait-timeout 240
+docker compose up -d
 docker compose ps
 ```
 
 Services attendus : postgres, synapse, element, jwt, livekit, coturn et ketesa.
 **Aucun service `proxy`, Caddy ou Nginx dans Compose.** Le rendu crée notamment :
 
-- `configs/generated/nginx/matrix.conf` : vhost pour Nginx installé sur l’hôte ;
+- `configs/generated/nginx/client.json` et `server.json` : données de découverte à intégrer à votre Nginx ;
 - `configs/generated/ketesa/config.json` : serveur public restreint pour Ketesa ;
 - configurations Synapse/Element/LiveKit/JWT/TURN et nouveaux secrets.
 
 Les appels ne sont pas prêts avant activation de Nginx : JWT utilise son URL HTTPS
 publique. Dans Docker, un alias `host-gateway` fait résoudre ce domaine vers l’hôte
 pour JWT, afin d’éviter une dépendance au retour NAT. Nginx doit écouter sur les
-interfaces IPv4 de l’hôte, comme dans le vhost généré. Son routage revient ensuite
+interfaces IPv4 de l’hôte. Son routage revient ensuite
 sur les backends loopback.
 
 En cas d’échec :
@@ -200,31 +197,30 @@ Les images sont épinglées aux versions de travail ; vérifier leur compatibili
 les avis de sécurité avant une ouverture durable. L’image Ketesa est le build
 `v1.5.1-subpath-admin`, prévu pour `/admin`.
 
-## 6. Installer le vhost dans Nginx hôte
+## 6. Intégrer la stack à votre Nginx
 
-Le modèle est dans `configs/nginx/matrix.conf.template`, mais **installer le fichier
-généré**, qui contient votre domaine, vos IP et les chemins réels des certificats :
+Le vhost est entièrement géré par l’exploitant. **Aucun modèle n’est généré ou
+installé par ce projet ; aucun script ne valide ou recharge Nginx.**
+Le contrat d’intégration (routes, ports, découverte, WebSocket et filtrage) est décrit
+dans [configs/nginx/README.md](configs/nginx/README.md).
+
+Configurer votre vhost pour `chat.pro-gx.fr` avec les ports loopback du Compose,
+les JSON de découverte produits au rendu et vos propres certificats. Protéger
+`/admin/` ET `/_synapse/admin/` par vos whitelists et garder les autres routes
+internes/fédération fermées, sauf l’exception OpenID nécessaire aux appels.
+Valider et recharger Nginx selon vos procédures d’exploitation, sans remplacer
+les autres sites. Les fichiers de découverte ne contiennent pas de secrets, mais
+le répertoire parent des configurations est privé : reprendre leur contenu dans
+votre vhost ou les publier depuis un emplacement lisible adapté.
+
+Une fois votre proxy actif, vérifier la santé complète :
 
 ```bash
-install -m 0600 configs/generated/nginx/matrix.conf /etc/nginx/sites-available/matrix-prod.conf
-ln -s /etc/nginx/sites-available/matrix-prod.conf /etc/nginx/sites-enabled/matrix-prod.conf
-nginx -t
-systemctl reload nginx
+docker compose up -d --wait --wait-timeout 240
 ```
 
-Si le lien existe déjà, ne pas le recréer. Si Nginx était installé mais arrêté, après
-un `nginx -t` réussi : `systemctl enable --now nginx`.
-Sauvegarder et désactiver seulement un ancien vhost qui utiliserait le même domaine,
-sans toucher aux autres sites. Sur une distribution n’utilisant pas sites-enabled,
-installer le fichier dans un répertoire inclus par le contexte `http`.
-
-Nginx reçoit directement le trafic Internet. S’il est lui-même derrière un proxy/CDN,
-adapter la récupération de l’IP réelle en ne faisant confiance qu’aux proxies connus,
-avant de considérer les restrictions d’administration comme effectives.
-
-Les backends étant des ports loopback stables, une recréation des conteneurs ne
-nécessite pas de mettre à jour des IP Docker dans Nginx. Si vous changez ces ports
-ou les IP autorisées, suivre la reconfiguration de l’étape 11.
+Une modification de la whitelist s’effectue uniquement dans Nginx, sans modifier
+`.env` ni régénérer les fichiers applicatifs.
 
 ## 7. Vérifier les interfaces et l’administration
 
@@ -252,8 +248,8 @@ Tester `/admin/` et `/_synapse/admin/v1/server_version` depuis :
 - le VPN/bureau autorisé : interface accessible, API exigeant toujours un jeton admin.
 
 L’IP autorisée est la sortie publique du poste, pas l’IP du serveur. Le VPN doit
-acheminer cette destination via sa sortie professionnelle. Vides, les deux champs
-ADMIN bloquent tout accès d’administration.
+acheminer cette destination via sa sortie professionnelle. Ces tests vérifient
+la whitelist configurée par vos soins dans Nginx.
 
 ## 8. Créer les comptes et tester les usages
 
@@ -307,8 +303,9 @@ l’ajouter au mécanisme de renouvellement. Si les fichiers sont identiques et 
 activés, aucune action sur les services n’est effectuée.
 
 En cas de changement, les anciennes copies sont sauvegardées sous `backups/tls-*`.
-Le script valide Nginx actif, redémarre coturn si le certificat a changé, recrée JWT
-si les racines ont changé, puis recharge Nginx. Il n’arrête pas Nginx ; TURN peut
+Le script redémarre coturn si le certificat a changé et recrée JWT si les racines
+ont changé. Il ne touche pas Nginx ; votre gestionnaire externe reste responsable
+de son rechargement. TURN peut
 interrompre les appels qui utilisent ses relais pendant son redémarrage.
 Les services arrêtés liront les fichiers à leur prochain démarrage.
 
@@ -359,24 +356,25 @@ python3 scripts/render.py --update
 docker compose up -d --wait --wait-timeout 240
 ```
 
-La régénération garde l’identité et les secrets ; elle adapte le chemin absolu TLS
-au dossier de restauration. Vérifier le vhost généré avant son installation dans le
-Nginx de test. Le certificat est celui sauvegardé : s’il a expiré, le renouveler via
+La régénération garde l’identité et les secrets. Adapter votre vhost de test
+séparément avec les ports locaux et la découverte restaurée. Le certificat est
+celui sauvegardé : s’il a expiré, le renouveler via
 le gestionnaire approprié. Les sauvegardes serveur ne remplacent pas les clés de
 récupération personnelles. Ne pas faire fonctionner simultanément deux copies
 indépendantes de la même identité sur Internet.
 
 ## 11. Reconfiguration et mises à jour
 
-Après modification des ports ou des IP administratives dans `.env` :
+Après modification des paramètres applicatifs ou des ports dans `.env` :
 
 ```bash
 python3 scripts/render.py --update
 docker compose config --quiet
 docker compose up -d --wait --wait-timeout 240
-install -m 0600 configs/generated/nginx/matrix.conf /etc/nginx/sites-available/matrix-prod.conf
-nginx -t && systemctl reload nginx
 ```
+
+Si les ports HTTP changent, mettre à jour séparément votre vhost Nginx.
+La whitelist reste exclusivement gérée dans Nginx.
 
 Le générateur sauvegarde `.env` et les configurations avant régénération. Le contenu
 manuel des fichiers générés peut être remplacé ; modifier le modèle/générateur si
@@ -392,15 +390,11 @@ Ne pas utiliser une suppression de `data/` ou de volumes comme dépannage.
 
 ## 12. État de vérification
 
-Le profil est préparé et validé en environnement de test isolé : rendu, modèle Compose,
-ports HTTP loopback, absence de proxy Docker et syntaxe du vhost Nginx.
-Des backends de test ont aussi confirmé le routage et le retrait des préfixes RTC,
-les ACL en accès refusé/autorisé, la conservation des secrets avec --update et le
-refus de changement de l’identité Matrix.
-L’image Ketesa pour `/admin` a été vérifiée dans le registre.
-Le gestionnaire de certificats externe, l’installation dans votre Nginx de production et un appel réel
-restent à valider sur le serveur cible. La préparation n’installe ni paquet ni vhost
-système, et ne démarre pas les services de production.
+Le rendu des configurations applicatives, le Compose et les ports HTTP loopback
+sont vérifiables sans Nginx. Les scripts ne dépendent plus d’un modèle de vhost,
+de whitelists dans `.env` ni de commandes Nginx/systemctl. Le certificat réel,
+votre vhost, ses listes d’accès et les appels depuis Internet restent à valider
+sur le serveur de production.
 
 Références officielles :
 - https://docs.docker.com/engine/install/debian/

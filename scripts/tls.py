@@ -79,18 +79,13 @@ try:
         temp.chmod(0o644)
         os.replace(temp,target)
     # data/ est privé ; les sous-montages TLS doivent rester lisibles par les UID des services.
-    nginx_active = bool(shutil.which('nginx')) and subprocess.run(['systemctl','is-active','--quiet','nginx']).returncode == 0
-    if nginx_active:
-        run('nginx','-t')
     if Path('configs/generated/jwt.env').exists():
         running = output('docker','compose','ps','--status','running','--services').decode().splitlines()
         if 'coturn' in running and pending['certificate']:
             run('docker','compose','restart','coturn')
         if 'jwt' in running and pending['trust']:
             run('docker','compose','up','-d','--no-deps','--force-recreate','jwt')
-    if nginx_active:
-        run('systemctl','reload','nginx')
     pending_file.unlink(missing_ok=True)
-    print('Certificat externe installé. Le renouvellement reste géré hors de la stack.')
+    print('Certificat installé pour les services Docker. Le proxy et le renouvellement restent gérés hors de la stack.')
 except subprocess.CalledProcessError as exc:
     raise SystemExit(f'Échec de l’installation TLS (code {exc.returncode}). Corriger la cause ci-dessus puis réexécuter la même commande.') from None
